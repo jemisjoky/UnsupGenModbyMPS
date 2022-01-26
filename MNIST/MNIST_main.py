@@ -12,7 +12,7 @@ np.set_printoptions(5, linewidth=4 * 28)
 from time import strftime
 import matplotlib as mpl
 
-mpl.use("Agg")
+# mpl.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MultipleLocator
 
@@ -77,6 +77,9 @@ def start():
     """Start the training, in a relatively high cutoff, over usually just 1 epoch"""
     dtset = np.load(dataset_name)
 
+    # Create experiment directory
+    if not os.path.isdir(run_dir):
+        os.mkdir(run_dir)
     new_dir = run_dir + strftime("mnist_%Y_%m_%d_%H%M") + "/"
     os.mkdir(new_dir)
     # with open("DATA_" + dataset_name.split("/")[-1] + ".txt", "w") as f:
@@ -91,11 +94,14 @@ def start():
     m.descent_steps = 10
     m.cutoff = 0.3
 
+    # Train model for one loop, comparing initial and final losses
     loss = m.get_train_loss()
-    print(f"Initial loss: {loss:.5f}")
+    print(f"Initial loss:  {loss:.5f}")
     num_loops = 1
     cut_rec = m.train(num_loops, rec_cut=True)
     m.cutoff = cut_rec
+    print(f"One loop loss: {m.losses[-1][1]:.5f}")
+
     save_dir = new_dir + f"Loop{num_loops-1}/"
     os.mkdir(save_dir)
     m.saveMPS(save_dir)
@@ -131,11 +137,11 @@ def onecutrain(lr_shrink, loopmax, safe_thres=0.5, lr_inf=1e-10):
             print("From now bondDmin=1")
 
         # train tentatively
-        loss_last = m.losses[-1]
+        loss_last = m.losses[-1][-1]
         while True:
             try:
                 m.train(nlp, rec_cut=False)
-                if m.losses[-1] - loss_last > safe_thres:
+                if m.losses[-1][-1] - loss_last > safe_thres:
                     print("lr=%1.3e is too large to continue safely" % lr)
                     raise Exception("lr=%1.3e is too large to continue safely" % lr)
             except:
@@ -181,6 +187,10 @@ if __name__ == "__main__":
 
     if argv[1] == "init":
         start()
+        # locs = np.asarray([t[0] for t in m.losses])
+        # losses = np.asarray([t[1] for t in m.losses])
+        # plt.plot(locs, losses)
+        # plt.show()
     elif argv[1] == "one":
         onecutrain(0.9, 250, 0.05)
     elif argv[1] == "plot":

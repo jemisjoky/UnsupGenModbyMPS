@@ -1,1 +1,4 @@
+# Data from MNIST experiment runs
+MNIST/rand1k_runs/*
+
 __pycache__/

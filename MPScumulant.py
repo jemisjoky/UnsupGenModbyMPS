@@ -36,7 +36,7 @@ class MPS_c:
                 space_size-1: left-canonicalized
             cumulant: see init_cumulants.__doc__
 
-            losses: recorder of loss
+            losses: recorder of (current_bond, loss) tuples
             trainhistory: recorder of training history
         """
         self.space_size = space_size
@@ -236,7 +236,7 @@ class MPS_c:
         """Get the NLL averaged on the training set"""
         L = -log(np.abs(self.Give_psi_cumulant()) ** 2).mean()  # - self.data_shannon
         if append:
-            self.losses.append(L)
+            self.losses.append([self.current_bond, L])
         return L
 
     # def calc_loss(self, dat):
@@ -327,28 +327,28 @@ class MPS_c:
         """Training over several epoches. `loops' is the number of epoches"""
         for loop in range(loops - 1 if rec_cut else loops):
             for bond in range(self.space_size - 2, 0, -1):
-                self.__bondtrain__(going_right=False, calc_loss=(bond == 1))
+                # self.__bondtrain__(going_right=False, calc_loss=(bond == 1))
+                self.__bondtrain__(going_right=False, calc_loss=True)
             for bond in range(0, self.space_size - 2):
-                self.__bondtrain__(
-                    going_right=True, calc_loss=(bond == self.space_size - 3)
-                )
-            # print("Current Loss: %.9f\nBondim:" % self.losses[-1])
+                self.__bondtrain__(going_right=True, calc_loss=True)
+                # going_right=True, calc_loss=(bond == self.space_size - 3)
+            # print("Current Loss: %.9f\nBondim:" % self.losses[-1][-1])
             # print(self.bond_dimension)
 
         if rec_cut:
             # Now loop = loops - 1
             cut_rec = [self.__bondtrain__(going_right=False, cutrec=True)]
             for bond in range(self.space_size - 3, 0, -1):
-                calc_loss = bond == 1
-                self.__bondtrain__(going_right=False, calc_loss=calc_loss)
+                # calc_loss = bond == 1
+                # self.__bondtrain__(going_right=False, calc_loss=calc_loss)
+                self.__bondtrain__(going_right=False, calc_loss=True)
             for bond in range(0, self.space_size - 2):
-                calc_loss = bond == self.space_size - 3
+                # calc_loss = bond == self.space_size - 3
                 cut_rec.append(
-                    self.__bondtrain__(
-                        going_right=True, cutrec=True, calc_loss=calc_loss
-                    )
+                    self.__bondtrain__(going_right=True, cutrec=True, calc_loss=True)
                 )
-            # print("Current Loss: %.9f\nBondim:" % self.losses[-1])
+                # going_right=True, cutrec=True, calc_loss=calc_loss
+            # print("Current Loss: %.9f\nBondim:" % self.losses[-1][-1])
             # print(self.bond_dimension)
         # All loops finished
         # print('Append History')
@@ -369,10 +369,10 @@ class MPS_c:
             while k >= 0 and cut_rec[k] < 0:
                 k -= 1
             if k >= 0:
-                print("Recommend cutoff for next loop:", cut_rec[k])
+                # print("Recommend cutoff for next loop:", cut_rec[k])
                 return cut_rec[k]
             else:
-                print("Recommend cutoff for next loop:", "Keep current value")
+                # print("Recommend cutoff for next loop:", "Keep current value")
                 return self.cutoff
 
     def saveMPS(self, save_dir):
@@ -406,7 +406,7 @@ class MPS_c:
             else:
                 f.write(np.array2string(self.bond_dimension, precision=0))
             if len(self.losses) > 0:
-                f.write("\nloss=%1.6e\n" % self.losses[-1])
+                f.write("\nloss=%1.6e\n" % self.losses[-1][-1])
 
             f.write("cutoff\tn_loop\tn_descent\tlearning_rate\tn_batch\n")
             for cutoff, loops, steps, step_size, nbatch in self.trainhistory:
@@ -414,16 +414,16 @@ class MPS_c:
                     f"{cutoff:1.2e}\t{loops}\t{steps}\t\t{step_size:1.2e}\t{nbatch}\n"
                 )
 
-        np.save(folder + "Cutoff.npy", self.cutoff)
-        np.save(folder + "Loss.npy", asarray(self.losses))
-        np.save(folder + "Bondim.npy", self.bond_dimension)
-        np.save(folder + "TrainHistory.npy", asarray(self.trainhistory))
-        np.save(folder + "CurrentBond.npy", self.current_bond)
+        np.save(save_dir + "Cutoff.npy", self.cutoff)
+        np.save(save_dir + "Loss.npy", asarray(self.losses))
+        np.save(save_dir + "Bondim.npy", self.bond_dimension)
+        np.save(save_dir + "TrainHistory.npy", asarray(self.trainhistory))
+        np.save(save_dir + "CurrentBond.npy", self.current_bond)
 
         # Create object to save matrices via np.savez_compressed
         digits = len(str(self.space_size))
         mat_dict = {f"mat_{i:0{digits}d}": mat for i, mat in enumerate(self.matrices)}
-        np.savez_compressed(folder + "Matrices.npz", **mat_dict)
+        np.savez_compressed(save_dir + "Matrices.npz", **mat_dict)
 
     def loadMPS(self, srch_pwd=None):
         """Loading a MPS from directory `srch_pwd'. If it is None, then search at current working directory"""
