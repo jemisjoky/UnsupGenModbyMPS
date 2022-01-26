@@ -6,6 +6,6 @@ format:
 style:
 	flake8 .
 
-.PHONY: train
-train:
-	python3 -m continuous-umps.train_scripts
+.PHONY: init
+init:
+	python3 -m MNIST.MNIST_main init

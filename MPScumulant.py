@@ -4,7 +4,7 @@ class MPS cumulant
 @author: congzlwag
 """
 import numpy as np
-from numpy import ones, dot, zeros, log, asarray, save, load, einsum
+from numpy import ones, dot, zeros, log, asarray, einsum
 from scipy.linalg import norm, svd
 from numpy.random import rand, seed, randint
 from time import strftime
@@ -36,7 +36,7 @@ class MPS_c:
                 space_size-1: left-canonicalized
             cumulant: see init_cumulants.__doc__
 
-            Loss: recorder of loss
+            losses: recorder of loss
             trainhistory: recorder of training history
         """
         self.space_size = space_size
@@ -68,7 +68,7 @@ class MPS_c:
         """
         self.merged_matrix = None
 
-        self.Loss = []
+        self.losses = []
         self.trainhistory = []
 
     def left_cano(self):
@@ -77,12 +77,12 @@ class MPS_c:
         Can be called at any time
         """
         if self.merged_matrix is not None:
-            self.rebuild_bond(True, kepbdm=True)
+            self.rebuild_bond(True, keep_bdims=True)
         if self.current_bond == -1:
             self.current_bond = 0
         for bond in range(self.current_bond, self.space_size - 1):
             self.merge_bond()
-            self.rebuild_bond(going_right=True, kepbdm=True)
+            self.rebuild_bond(going_right=True, keep_bdims=True)
 
     def merge_bond(self):
         k = self.current_bond
@@ -96,10 +96,10 @@ class MPS_c:
     def normalize(self):
         self.merged_matrix /= norm(self.merged_matrix)
 
-    def rebuild_bond(self, going_right, spec=False, cutrec=False, kepbdm=False):
+    def rebuild_bond(self, going_right, spec=False, cutrec=False, keep_bdims=False):
         """Decomposition
         going_right: if we're sweeping right or not
-        kepbdm: if the bond dimension is demanded to keep invariant compared with the value before being merged,
+        keep_bdims: if the bond dimension is demanded to keep invariant compared with the value before being merged,
             when gauge transformation is carried out, this is often True.
         spec: if the truncated singular values are returned or not
         cutrec: if a recommended cutoff is returned or not
@@ -123,12 +123,11 @@ class MPS_c:
             )
             raise FloatingPointError("Merged_mat trained to all-zero")
 
-        if self.verbose:
-            print("bond:", k)
         if self.verbose > 1:
+            print("bond:", k)
             print(s)
 
-        if not kepbdm:
+        if not keep_bdims:
             bdmax = min(self.maxibond, s.size)
             l = self.minibond
             while l < bdmax and s[l] >= s[0] * self.cutoff:
@@ -156,10 +155,8 @@ class MPS_c:
             U = dot(U, s)
             U /= norm(U)
 
-        if not kepbdm:
+        if not keep_bdims:
             if self.verbose > 1:
-                print(self.bond_dimension)
-            elif self.verbose > 0:
                 print("Bondim %d->%d" % (bdm_last, l))
 
         self.matrices[k] = U.reshape(
@@ -235,21 +232,17 @@ class MPS_c:
                 self.cumulants[k + 1],
             )
 
-    def Show_Loss(self, append=True):
-        """Show the NLL averaged on the training set"""
+    def get_train_loss(self, append=True):
+        """Get the NLL averaged on the training set"""
         L = -log(np.abs(self.Give_psi_cumulant()) ** 2).mean()  # - self.data_shannon
         if append:
-            self.Loss.append(L)
-        if self.verbose > 0:
-            print("Current loss:", L)
+            self.losses.append(L)
         return L
 
-    def Calc_Loss(self, dat):
-        """Show the NLL averaged on an arbitrary set"""
-        L = -log(np.abs(self.Give_psi(dat)) ** 2).mean()
-        if self.verbose > 0:
-            print("Calculated loss:", L)
-        return L
+    # def calc_loss(self, dat):
+    #     """Show the NLL averaged on an arbitrary set"""
+    #     L = -log(np.abs(self.Give_psi(dat)) ** 2).mean()
+    #     return L
 
     def Gradient_descent_cumulants(self, batch_id):
         """ Gradient descent using cumulants, which efficiently avoids lots of tensor contraction!\\
@@ -311,10 +304,10 @@ class MPS_c:
                 self.cumulants[k + 2],
             )
 
-    def __bondtrain__(self, going_right, cutrec=False, showloss=False):
+    def __bondtrain__(self, going_right=True, cutrec=False, calc_loss=False):
         """Training on current_bond
         going_right & cutrec: see rebuild_bond
-        showloss: whether Show_Loss is called.
+        calc_loss: whether get_train_loss is called.
         """
         self.merge_bond()
         batch_start = randint(self.nbatch)
@@ -322,41 +315,47 @@ class MPS_c:
         self.batchsize = self.data.shape[0] // self.nbatch
         for n in range(self.descent_steps):
             self.Gradient_descent_cumulants(batch_id=(batch_start + n) % self.nbatch)
-        # self.Show_Loss()#Before cutoff
+        # self.get_train_loss()#Before cutoff
         cut_recommend = self.rebuild_bond(going_right, cutrec=cutrec)
         self.update_cumulants(gone_right_just_now=going_right)
-        if showloss:
-            self.Show_Loss()
+        if calc_loss:
+            self.get_train_loss()
         if cutrec:
             return cut_recommend
 
-    def train(self, Loops, rec_cut=True):
-        """Training over several epoches. `Loops' is the number of epoches"""
-        for loop in range(Loops - 1 if rec_cut else Loops):
+    def train(self, loops, rec_cut=True):
+        """Training over several epoches. `loops' is the number of epoches"""
+        for loop in range(loops - 1 if rec_cut else loops):
             for bond in range(self.space_size - 2, 0, -1):
-                self.__bondtrain__(False, showloss=(bond == 1))
+                self.__bondtrain__(going_right=False, calc_loss=(bond == 1))
             for bond in range(0, self.space_size - 2):
-                self.__bondtrain__(True, showloss=(bond == self.space_size - 3))
-            print("Current Loss: %.9f\nBondim:" % self.Loss[-1])
-            print(self.bond_dimension)
+                self.__bondtrain__(
+                    going_right=True, calc_loss=(bond == self.space_size - 3)
+                )
+            # print("Current Loss: %.9f\nBondim:" % self.losses[-1])
+            # print(self.bond_dimension)
 
         if rec_cut:
-            # Now loop = Loops - 1
-            cut_rec = [self.__bondtrain__(False, True)]
+            # Now loop = loops - 1
+            cut_rec = [self.__bondtrain__(going_right=False, cutrec=True)]
             for bond in range(self.space_size - 3, 0, -1):
-                self.__bondtrain__(False, showloss=(bond == 1))
+                calc_loss = bond == 1
+                self.__bondtrain__(going_right=False, calc_loss=calc_loss)
             for bond in range(0, self.space_size - 2):
+                calc_loss = bond == self.space_size - 3
                 cut_rec.append(
-                    self.__bondtrain__(True, True, bond == self.space_size - 3)
+                    self.__bondtrain__(
+                        going_right=True, cutrec=True, calc_loss=calc_loss
+                    )
                 )
-            print("Current Loss: %.9f\nBondim:" % self.Loss[-1])
-            print(self.bond_dimension)
+            # print("Current Loss: %.9f\nBondim:" % self.losses[-1])
+            # print(self.bond_dimension)
         # All loops finished
         # print('Append History')
         self.trainhistory.append(
             [
                 self.cutoff,
-                Loops,
+                loops,
                 self.descent_steps,
                 self.descenting_step_length,
                 self.nbatch,
@@ -376,71 +375,67 @@ class MPS_c:
                 print("Recommend cutoff for next loop:", "Keep current value")
                 return self.cutoff
 
-    def saveMPS(self, prefix="", override=False):
+    def saveMPS(self, save_dir):
         """Saving all the information of the MPS into a folder
         The name of the folder is defaultly set as:
-            prefix + strftime('MPS_%H%M_%d_%b'), about the moment you save it
+            save_dir + strftime('MPS_%H%M_%d_%b'), about the moment you save it
         but you can also override the timestamp, which means the name will be:
-            prefix + 'MPS'
+            save_dir + 'MPS'
         """
         assert self.merged_matrix is None
-        if not override:
-            timestamp = prefix + strftime("MPS_%H%M_%d_%b")
-        else:
-            timestamp = prefix + "MPS"
-        try:
-            os.mkdir("./" + timestamp + "/")
-        except FileExistsError:
-            pass
-        os.chdir("./" + timestamp + "/")
-        fp = open("MPS.log", "w")
-        fp.write("Present State of MPS:\n")
-        fp.write(
-            "space_size=%d,\ncutoff=%1.5e,\tlr=%1.5e,\tnstep=%d\tnbatch=%d\n"
-            % (
-                self.space_size,
-                self.cutoff,
-                self.descenting_step_length,
-                self.descent_steps,
-                self.nbatch,
+
+        with open(save_dir + "MPS.log", "w") as f:
+            f.write("Present State of MPS:\n")
+            f.write(
+                "space_size=%d,\ncutoff=%1.5e,\tlr=%1.5e,\tnstep=%d\tnbatch=%d\n"
+                % (
+                    self.space_size,
+                    self.cutoff,
+                    self.descenting_step_length,
+                    self.descent_steps,
+                    self.nbatch,
+                )
             )
-        )
-        fp.write("bond dimension:\n")
-        a = int(np.sqrt(self.space_size))
-        if self.space_size % a == 0:
-            a *= int(np.log10(self.bond_dimension.max())) + 2
-            fp.write(
-                np.array2string(self.bond_dimension, precision=0, max_line_width=a)
-            )
-        else:
-            fp.write(np.array2string(self.bond_dimension, precision=0))
-        try:
-            fp.write("\nloss=%1.6e\n" % self.Loss[-1])
-        except:
-            pass
-        save("Cutoff.npy", self.cutoff)
-        save("Loss.npy", asarray(self.Loss))
-        save("Bondim.npy", self.bond_dimension)
-        save("TrainHistory.npy", asarray(self.trainhistory))
-        save("CurrentBond.npy", self.current_bond)
-        np.savez_compressed("Mats.npz", Mats=self.matrices)
-        fp.write("cutoff\tn_loop\tn_descent\tlearning_rate\tn_batch\n")
-        for history in self.trainhistory:
-            fp.write("%1.2e\t%d\t%d\t\t%1.2e\t%d\n" % tuple(history))
-        fp.close()
-        os.chdir("../")
+            f.write("bond dimensions:\n")
+            a = int(np.sqrt(self.space_size))
+            if self.space_size % a == 0:
+                a *= len(str(self.bond_dimension.max())) + 2
+                f.write(
+                    np.array2string(self.bond_dimension, precision=0, max_line_width=a)
+                )
+            else:
+                f.write(np.array2string(self.bond_dimension, precision=0))
+            if len(self.losses) > 0:
+                f.write("\nloss=%1.6e\n" % self.losses[-1])
+
+            f.write("cutoff\tn_loop\tn_descent\tlearning_rate\tn_batch\n")
+            for cutoff, loops, steps, step_size, nbatch in self.trainhistory:
+                f.write(
+                    f"{cutoff:1.2e}\t{loops}\t{steps}\t\t{step_size:1.2e}\t{nbatch}\n"
+                )
+
+        np.save(folder + "Cutoff.npy", self.cutoff)
+        np.save(folder + "Loss.npy", asarray(self.losses))
+        np.save(folder + "Bondim.npy", self.bond_dimension)
+        np.save(folder + "TrainHistory.npy", asarray(self.trainhistory))
+        np.save(folder + "CurrentBond.npy", self.current_bond)
+
+        # Create object to save matrices via np.savez_compressed
+        digits = len(str(self.space_size))
+        mat_dict = {f"mat_{i:0{digits}d}": mat for i, mat in enumerate(self.matrices)}
+        np.savez_compressed(folder + "Matrices.npz", **mat_dict)
 
     def loadMPS(self, srch_pwd=None):
         """Loading a MPS from directory `srch_pwd'. If it is None, then search at current working directory"""
         if srch_pwd is not None:
             oripwd = os.getcwd()
             os.chdir(srch_pwd)
-        self.bond_dimension = load("Bondim.npy")
+        self.bond_dimension = np.load("Bondim.npy")
         self.space_size = len(self.bond_dimension)
-        self.trainhistory = load("TrainHistory.npy").tolist()
-        self.Loss = load("Loss.npy").tolist()
+        self.trainhistory = np.load("TrainHistory.npy").tolist()
+        self.losses = np.load("Loss.npy").tolist()
         try:
-            self.current_bond = int(load("CurrentBond.npy"))
+            self.current_bond = int(np.load("CurrentBond.npy"))
         except FileNotFoundError:
             self.current_bond = self.space_size - 2
             # most MPS are saved after a loop, when current_bond is space_size-2
@@ -461,13 +456,14 @@ class MPS_c:
         except:
             pass
         try:
-            self.cutoff = float(load("Cutoff.npy"))
+            self.cutoff = float(np.load("Cutoff.npy"))
         except:
             pass
         try:
-            self.matrices = list(np.load("Mats.npz")["Mats"])
+            mat_dict = np.load("Matrices.npz")
+            self.matrices = [mat_dict[k] for k in sorted(mat_dict.keys())]
         except:
-            self.matrices = [load("Mat_%d.npy" % i) for i in range(self.space_size)]
+            self.matrices = [np.load("Mat_%d.npy" % i) for i in range(self.space_size)]
 
         self.merged_matrix = None
         if srch_pwd is not None:
@@ -548,11 +544,11 @@ class MPS_c:
             if self.current_bond > r - 1:
                 for bond in range(self.current_bond, r - 2, -1):
                     self.merge_bond()
-                    self.rebuild_bond(going_right=False, kepbdm=True)
+                    self.rebuild_bond(going_right=False, keep_bdims=True)
             elif self.current_bond < l:
                 for bond in range(self.current_bond, l):
                     self.merge_bond()
-                    self.rebuild_bond(going_right=True, kepbdm=True)
+                    self.rebuild_bond(going_right=True, keep_bdims=True)
             vec = self.matrices[l][:, state[l], :]
             for p in range(l + 1, r):
                 vec = dot(vec, self.matrices[p][:, state[p], :])
@@ -632,11 +628,11 @@ class MPS_c:
             if bd >= p_uncan:
                 while self.current_bond >= p_uncan:
                     self.merge_bond()
-                    self.rebuild_bond(False, kepbdm=True)
+                    self.rebuild_bond(False, keep_bdims=True)
             else:
                 while self.current_bond < p_uncan:
                     self.merge_bond()
-                    self.rebuild_bond(False, kepbdm=True)
+                    self.rebuild_bond(False, keep_bdims=True)
         """Canonicalization finished
         From now on we should never operate the matrices in the sampling
         """
@@ -806,6 +802,6 @@ class MPS_c:
             direction = 1 if self.current_bond < target_bond else -1
             for b in range(self.current_bond, target_bond, direction):
                 self.merge_bond(b)
-                self.rebuild_bond(going_right=(direction == 1), kepbdm=True)
+                self.rebuild_bond(going_right=(direction == 1), keep_bdims=True)
                 if update_cumulant:
                     self.update_cumulants(direction == 1)

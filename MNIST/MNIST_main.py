@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from sys import path, argv
 
-path.append("../")
+# path.append("../")
 
 from MPScumulant import MPS_c
 import os
@@ -43,9 +43,9 @@ def loss_plot(mps, spars):
     fig, ax = plt.subplots()
     nsteps = 2 * mps.space_size - 4
     if spars:
-        ax.plot(np.arange(len(mps.Loss)) * (nsteps // 2), mps.Loss, ".")
+        ax.plot(np.arange(len(mps.losses)) * (nsteps // 2), mps.losses, ".")
     else:
-        ax.plot(mps.Loss)
+        ax.plot(mps.losses)
     ax.xaxis.set_major_locator(MultipleLocator(nsteps))
     ax.xaxis.set_minor_locator(MultipleLocator(nsteps // 2))
     ax.xaxis.grid(which="both")
@@ -55,7 +55,8 @@ def loss_plot(mps, spars):
 
 def find_latest_MPS():
     """Searching for the last MPS in current directory"""
-    name_list = os.listdir("./")
+    breakpoint()
+    name_list = os.listdir(run_dir)
     pmx = -1
     mx = 0
     pattrn = r"Loop(\d+)M"
@@ -76,33 +77,33 @@ def start():
     """Start the training, in a relatively high cutoff, over usually just 1 epoch"""
     dtset = np.load(dataset_name)
 
-    timestamp = strftime("MNIST-contin_on_%B_%d_%H%M")
-    os.mkdir(timestamp)
-    os.chdir(timestamp)
-    f = open("DATA_" + dataset_name.split("/")[-1] + ".txt", "w")
-    f.write("../" + dataset_name)
-    f.close()
+    new_dir = run_dir + strftime("mnist_%Y_%m_%d_%H%M") + "/"
+    os.mkdir(new_dir)
+    # with open("DATA_" + dataset_name.split("/")[-1] + ".txt", "w") as f:
+    #  f.write(dataset_name)
 
-    m.verbose = 0
+    # Initialize model
     m.left_cano()
     m.designate_data(dtset)
     m.init_cumulants()
-    # m.verbose = 1
     m.nbatch = 10
     m.descenting_step_length = 0.05
     m.descent_steps = 10
     m.cutoff = 0.3
 
-    print(m.Show_Loss())
-    nlp = 1
-    cut_rec = m.train(nlp, True)
+    loss = m.get_train_loss()
+    print(f"Initial loss: {loss:.5f}")
+    num_loops = 1
+    cut_rec = m.train(num_loops, rec_cut=True)
     m.cutoff = cut_rec
-    m.saveMPS("Loop%d" % (nlp - 1), True)
+    save_dir = new_dir + f"Loop{num_loops-1}/"
+    os.mkdir(save_dir)
+    m.saveMPS(save_dir)
 
 
 def onecutrain(lr_shrink, loopmax, safe_thres=0.5, lr_inf=1e-10):
     """Continue the training, in a fixed cutoff, train until loopmax is finished"""
-    dtset = np.load("../" + dataset_name)
+    assert False  # dtset = np.load("../" + dataset_name)
     m.designate_data(dtset)
 
     mx, folder = find_latest_MPS()
@@ -130,11 +131,11 @@ def onecutrain(lr_shrink, loopmax, safe_thres=0.5, lr_inf=1e-10):
             print("From now bondDmin=1")
 
         # train tentatively
-        loss_last = m.Loss[-1]
+        loss_last = m.losses[-1]
         while True:
             try:
-                m.train(nlp, False)
-                if m.Loss[-1] - loss_last > safe_thres:
+                m.train(nlp, rec_cut=False)
+                if m.losses[-1] - loss_last > safe_thres:
                     print("lr=%1.3e is too large to continue safely" % lr)
                     raise Exception("lr=%1.3e is too large to continue safely" % lr)
             except:
@@ -150,15 +151,31 @@ def onecutrain(lr_shrink, loopmax, safe_thres=0.5, lr_inf=1e-10):
                 break
 
         loop_last += nlp
-        m.saveMPS("Loop%d" % loop_last, True)
+        assert False
+        m.saveMPS("Loop%d" % loop_last)  # TODO: Give this a real directory to save in
         print("Loop%d Saved" % loop_last)
 
 
 if __name__ == "__main__":
-    # Assumed to be called with at least one command
+    import traceback
+    import warnings
+    import sys
+
+    def warn_with_traceback(message, category, filename, lineno, file=None, line=None):
+
+        log = file if hasattr(file, "write") else sys.stderr
+        traceback.print_stack(file=log)
+        log.write(warnings.formatwarning(message, category, filename, lineno, line))
+
+    warnings.showwarning = warn_with_traceback
+
+    # Must be called with at least one command
     assert len(argv) > 1
 
-    dataset_name = "mnist-rand1k_28_thr50_z/_data.npy"
+    # Relevant directories for the random 1k images experiment
+    mnist_dir = "./MNIST/"
+    run_dir = mnist_dir + "rand1k_runs/"
+    dataset_name = mnist_dir + "mnist-rand1k_28_thr50_z/_data.npy"
 
     m = MPS_c(28 * 28)
 
