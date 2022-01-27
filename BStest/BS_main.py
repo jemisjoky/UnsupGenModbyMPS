@@ -20,7 +20,7 @@ def remember(mps, steps, nsam):
     steps: number of steps they walk
     Their final states are returned
     """
-    nsize = mps.space_size
+    nsize = mps.mps_len
     print("n_sample=%d" % nsam)
     current = randint(2, size=(nsam, nsize))
 

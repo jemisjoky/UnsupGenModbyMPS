@@ -3,23 +3,30 @@
 class MPS cumulant
 @author: congzlwag
 """
-import numpy as np
-from numpy import ones, dot, zeros, log, asarray, einsum
-from scipy.linalg import norm, svd
-from numpy.random import rand, seed, randint
-from time import strftime
 import os
+import re
 import sys
+import pickle
 
+import gzip
+import numpy as np
+from numpy import einsum
+from numpy.random import rand, seed
+from numpy.linalg import norm, svd
+
+# from scipy.linalg import norm, svd
+
+DEBUG_LIST = []
 
 class MPS_c:
-    def __init__(self, space_size):
+    def __init__(self, mps_len, in_dim=2):
         """
         MPS class, with cumulant technique, efficient in DMRG-2
         Attributes:
-            space_size: length of chain
+            mps_len: length of chain
+            in_dim: dimension of input to MPS cores
             cutoff: truncation rate
-            descenting_step_length: learning rate
+            step_size: learning rate
             nbatch: number of batches
 
             bond_dimension: bond dimensions;
@@ -30,18 +37,19 @@ class MPS_c:
                 when two adjacent tensors are merged but not decomposed yet
             current_bond: a multifunctional pointer
                 -1: totally random matrices, need canonicalization
-                in range(space_size-1):
+                in range(mps_len-1):
                     if merge_matrix is None: current_bond is the one to be merged next time
                     else: current_bond is the merged bond
-                space_size-1: left-canonicalized
+                mps_len-1: left-canonicalized
             cumulant: see init_cumulants.__doc__
 
             losses: recorder of (current_bond, loss) tuples
             trainhistory: recorder of training history
         """
-        self.space_size = space_size
+        self.mps_len = mps_len
+        self.in_dim = in_dim
         self.cutoff = 0.01
-        self.descenting_step_length = 0.1
+        self.step_size = 0.1
         self.descent_steps = 10
         self.verbose = 1
         self.nbatch = 1
@@ -50,21 +58,21 @@ class MPS_c:
         init_bondim = 2
         self.minibond = 2
         self.maxibond = 300
-        self.bond_dimension = init_bondim * ones((space_size,), dtype=np.int16)
+        self.bond_dimension = init_bondim * np.ones((mps_len,), dtype=np.int16)
         self.bond_dimension[-1] = 1
         seed(1)
         self.matrices = [
-            rand(self.bond_dimension[i - 1], 2, self.bond_dimension[i])
-            for i in range(space_size)
+            rand(self.bond_dimension[i - 1], self.in_dim, self.bond_dimension[i])
+            for i in range(mps_len)
         ]
 
         self.current_bond = -1
         """Multifunctional pointer
         -1: totally random matrices, need canonicalization
-        in range(space_size-1): 
+        in range(mps_len-1): 
             if merge_matrix is None: current_bond is the one to be merged next time
             else: current_bond is the merged bond
-        space_size-1: left-canonicalized
+        mps_len-1: left-canonicalized
         """
         self.merged_matrix = None
 
@@ -80,7 +88,7 @@ class MPS_c:
             self.rebuild_bond(True, keep_bdims=True)
         if self.current_bond == -1:
             self.current_bond = 0
-        for bond in range(self.current_bond, self.space_size - 1):
+        for bond in range(self.current_bond, self.mps_len - 1):
             self.merge_bond()
             self.rebuild_bond(going_right=True, keep_bdims=True)
 
@@ -89,12 +97,9 @@ class MPS_c:
         self.merged_matrix = np.einsum(
             "ijk,klm->ijlm",
             self.matrices[k],
-            self.matrices[(k + 1) % self.space_size],
+            self.matrices[(k + 1) % self.mps_len],
             order="C",
         )
-
-    def normalize(self):
-        self.merged_matrix /= norm(self.merged_matrix)
 
     def rebuild_bond(self, going_right, spec=False, cutrec=False, keep_bdims=False):
         """Decomposition
@@ -106,12 +111,12 @@ class MPS_c:
         """
         assert self.merged_matrix is not None
         k = self.current_bond
-        kp1 = (k + 1) % self.space_size
+        kp1 = (k + 1) % self.mps_len
         U, s, V = svd(
             self.merged_matrix.reshape(
                 (
-                    self.bond_dimension[(k - 1) % self.space_size] * 2,
-                    2 * self.bond_dimension[kp1],
+                    self.bond_dimension[(k - 1) % self.mps_len] * self.in_dim,
+                    self.in_dim * self.bond_dimension[kp1],
                 )
             )
         )
@@ -149,10 +154,10 @@ class MPS_c:
         self.bond_dimension[k] = l
 
         if going_right:
-            V = dot(s, V)
+            V = np.dot(s, V)
             V /= norm(V)
         else:
-            U = dot(U, s)
+            U = np.dot(U, s)
             U /= norm(U)
 
         if not keep_bdims:
@@ -160,9 +165,9 @@ class MPS_c:
                 print("Bondim %d->%d" % (bdm_last, l))
 
         self.matrices[k] = U.reshape(
-            (self.bond_dimension[(k - 1) % self.space_size], 2, l)
+            (self.bond_dimension[(k - 1) % self.mps_len], self.in_dim, l)
         )
-        self.matrices[kp1] = V.reshape((l, 2, self.bond_dimension[kp1]))
+        self.matrices[kp1] = V.reshape((l, self.in_dim, self.bond_dimension[kp1]))
 
         self.current_bond += 1 if going_right else -1
         self.merged_matrix = None
@@ -185,17 +190,17 @@ class MPS_c:
         """
         Initialize a cache for left environments and right environments, `cumulants'
         During the training phase, it will be kept unchanged that:
-        1) len(cumulant)== space_size
-        2) cumulant[0]  == ones((n_sample, 1))
-        3) cumulant[-1] == ones((1, n_sample))
+        1) len(cumulant)== mps_len
+        2) cumulant[0]  == np.ones((n_sample, 1))
+        3) cumulant[-1] == np.ones((1, n_sample))
         4)  k = current_bond
             cumulant[j] =     if 0<j<=k: A(0)...A(j-1)
-                            elif k<j<space_size-1: A(j+1)...A(space_size-1)
+                            elif k<j<mps_len-1: A(j+1)...A(mps_len-1)
         """
-        if self.current_bond == self.space_size - 1:
-            # In this case, the MPS is left-canonicalized except the right most one, so the bond to be merged is space_size-2
+        if self.current_bond == self.mps_len - 1:
+            # In this case, the MPS is left-canonicalized except the right most one, so the bond to be merged is mps_len-2
             self.current_bond -= 1
-        self.cumulants = [ones((self.data.shape[0], 1))]
+        self.cumulants = [np.ones((self.data.shape[0], 1))]
         for n in range(0, self.current_bond):
             self.cumulants.append(
                 einsum(
@@ -204,8 +209,8 @@ class MPS_c:
                     self.matrices[n][:, self.data[:, n], :],
                 )
             )
-        right_part = [ones((1, self.data.shape[0]))]
-        for n in range(self.space_size - 1, self.current_bond + 1, -1):
+        right_part = [np.ones((1, self.data.shape[0]))]
+        for n in range(self.mps_len - 1, self.current_bond + 1, -1):
             right_part = [
                 einsum(
                     "jil,li->ji", self.matrices[n][:, self.data[:, n]], right_part[0]
@@ -214,7 +219,9 @@ class MPS_c:
         self.cumulants = self.cumulants + right_part
 
     def Give_psi_cumulant(self):
-        """Calculate the psi on the training set"""
+        """
+        Calculate the probability amplitudes of everything in the training set
+        """
         k = self.current_bond
         if self.merged_matrix is None:
             return einsum(
@@ -234,41 +241,57 @@ class MPS_c:
 
     def get_train_loss(self, append=True):
         """Get the NLL averaged on the training set"""
-        L = -log(np.abs(self.Give_psi_cumulant()) ** 2).mean()  # - self.data_shannon
+        L = -np.log(np.abs(self.Give_psi_cumulant()) ** 2).mean()  # - self.data_shannon
         if append:
             self.losses.append([self.current_bond, L])
         return L
 
     # def calc_loss(self, dat):
     #     """Show the NLL averaged on an arbitrary set"""
-    #     L = -log(np.abs(self.Give_psi(dat)) ** 2).mean()
+    #     L = -np.log(np.abs(self.Give_psi(dat)) ** 2).mean()
     #     return L
 
-    def Gradient_descent_cumulants(self, batch_id):
+    def gradient_descent_cumulants(self, batch_id):
         """ Gradient descent using cumulants, which efficiently avoids lots of tensor contraction!\\
             Together with update_cumulants, its computational complexity for updating each tensor is D^2
             Added by Pan Zhang on 2017.08.01
             Revised to single cumulant by Jun Wang on 20170802
+
+        This trains the merged core containing the contraction of cores
+        associated with sites k and k+1, for k := self.current_bond
         """
+        # Index of the data in the current minibatch
         indx = range(batch_id * self.batchsize, (batch_id + 1) * self.batchsize)
+        # All data in the current minibatch, with shape (batchsize, mps_len)
         states = self.data[indx]
         k = self.current_bond
-        kp1 = (k + 1) % self.space_size
-        km1 = (k - 1) % self.space_size
-        left_vecs = self.cumulants[k][indx, :]  # batchsize * D
-        right_vecs = self.cumulants[kp1][:, indx]  # D * batchsize
+        kp1 = (k + 1) % self.mps_len
+        km1 = (k - 1) % self.mps_len
+        # 
+        left_vecs = self.cumulants[k][indx, :]      # shape = (batchsize, D)
+        right_vecs = self.cumulants[kp1][:, indx]   # shape = (D, batchsize)
 
-        phi_mat = einsum("ij,ki->ijk", left_vecs, right_vecs)  # batchsize*D*D
+        # Batch of rank-1 matrices containing left and right environments
+        phi_mat = einsum("ij,ki->ijk", left_vecs, right_vecs)
+
+        # Probability amplitudes associated with all inputs in the batch
         psi = einsum(
             "ij,jik,ki->i",
             left_vecs,
             self.merged_matrix[:, states[:, k], states[:, kp1], :],
             right_vecs,
-        )  # batchsize*D
+        )
 
-        gradient = zeros([self.bond_dimension[km1], 2, 2, self.bond_dimension[kp1]])
+        gradient = np.zeros(
+            (
+                self.bond_dimension[km1],
+                self.in_dim,
+                self.in_dim,
+                self.bond_dimension[kp1],
+            )
+        )
         psi_inv = 1 / psi
-        if (psi == 0).sum():
+        if np.any(psi == 0):
             print(
                 "Error: At bond %d, batchsize=%d, while %d of them psi=0."
                 % (self.current_bond, self.batchsize, (psi == 0).sum())
@@ -276,14 +299,26 @@ class MPS_c:
             print(np.argwhere(psi == 0).ravel())
             print("Maybe you should decrease n_batch")
             raise ZeroDivisionError("Some of the psis=0")
-        for i, j in [(i, j) for i in range(2) for j in range(2)]:
+
+        # The gradient constructed below is equal to the sum of `batchsize`
+        # individual contributions, each of which is an outer product of the
+        # left and right environments for each datum, along with the (one-hot
+        # encoded) input vectors associated with each datum at sites k and k+1.
+        # Each one of these is rescaled by the inverse of the probability
+        # amplitude associated with a datum, and then they are all averaged 
+        # together. A factor of the merged matrix is subtracted from
+        # this before gradient before it is applied to the merged matrix, and
+        # the result is finally normalized so the merged matrix has unit norm.
+        for i, j in [(i, j) for i in range(self.in_dim) for j in range(self.in_dim)]:
             idx = (states[:, k] == i) * (states[:, kp1] == j)
             gradient[:, i, j, :] = (
                 np.einsum("ijk,i->jk", phi_mat[idx, :, :], psi_inv[idx]) * 2
             )
-        gradient = gradient / self.batchsize - 2 * self.merged_matrix
-        self.merged_matrix += gradient * self.descenting_step_length
-        self.normalize()
+        gradient /= self.batchsize
+        gradient -= 2 * self.merged_matrix
+
+        self.merged_matrix += gradient * self.step_size
+        self.merged_matrix /= norm(self.merged_matrix)
 
     def update_cumulants(self, gone_right_just_now):
         """After rebuid_bond, update self.cumulants.
@@ -310,11 +345,11 @@ class MPS_c:
         calc_loss: whether get_train_loss is called.
         """
         self.merge_bond()
-        batch_start = randint(self.nbatch)
+        batch_start = np.random.randint(self.nbatch)
         # batch_start = 0
         self.batchsize = self.data.shape[0] // self.nbatch
         for n in range(self.descent_steps):
-            self.Gradient_descent_cumulants(batch_id=(batch_start + n) % self.nbatch)
+            self.gradient_descent_cumulants(batch_id=(batch_start + n) % self.nbatch)
         # self.get_train_loss()#Before cutoff
         cut_recommend = self.rebuild_bond(going_right, cutrec=cutrec)
         self.update_cumulants(gone_right_just_now=going_right)
@@ -326,24 +361,24 @@ class MPS_c:
     def train(self, loops, rec_cut=True):
         """Training over several epoches. `loops' is the number of epoches"""
         for loop in range(loops - 1 if rec_cut else loops):
-            for bond in range(self.space_size - 2, 0, -1):
+            for bond in range(self.mps_len - 2, 0, -1):
                 # self.__bondtrain__(going_right=False, calc_loss=(bond == 1))
                 self.__bondtrain__(going_right=False, calc_loss=True)
-            for bond in range(0, self.space_size - 2):
+            for bond in range(0, self.mps_len - 2):
                 self.__bondtrain__(going_right=True, calc_loss=True)
-                # going_right=True, calc_loss=(bond == self.space_size - 3)
+                # going_right=True, calc_loss=(bond == self.mps_len - 3)
             # print("Current Loss: %.9f\nBondim:" % self.losses[-1][-1])
             # print(self.bond_dimension)
 
         if rec_cut:
             # Now loop = loops - 1
             cut_rec = [self.__bondtrain__(going_right=False, cutrec=True)]
-            for bond in range(self.space_size - 3, 0, -1):
+            for bond in range(self.mps_len - 3, 0, -1):
                 # calc_loss = bond == 1
                 # self.__bondtrain__(going_right=False, calc_loss=calc_loss)
                 self.__bondtrain__(going_right=False, calc_loss=True)
-            for bond in range(0, self.space_size - 2):
-                # calc_loss = bond == self.space_size - 3
+            for bond in range(0, self.mps_len - 2):
+                # calc_loss = bond == self.mps_len - 3
                 cut_rec.append(
                     self.__bondtrain__(going_right=True, cutrec=True, calc_loss=True)
                 )
@@ -357,15 +392,15 @@ class MPS_c:
                 self.cutoff,
                 loops,
                 self.descent_steps,
-                self.descenting_step_length,
+                self.step_size,
                 self.nbatch,
             ]
         )
         if rec_cut:
             if self.verbose > 2:
-                print(asarray(cut_rec))
+                print(np.asarray(cut_rec))
             cut_rec.sort(reverse=True)
-            k = max(5, int(self.space_size * 0.2))
+            k = max(5, int(self.mps_len * 0.2))
             while k >= 0 and cut_rec[k] < 0:
                 k -= 1
             if k >= 0:
@@ -375,70 +410,73 @@ class MPS_c:
                 # print("Recommend cutoff for next loop:", "Keep current value")
                 return self.cutoff
 
+    def train_snapshot(self):
+        """
+        Return a text summary of the state of training of the MPS
+        """
+        snapshot = []
+        snapshot.append("Present State of MPS:")
+        snapshot.append(
+            "mps_len=%d,\ncutoff=%1.5e,\tlr=%1.5e,\tnstep=%d,\tnbatch=%d"
+            % (
+                self.mps_len,
+                self.cutoff,
+                self.step_size,
+                self.descent_steps,
+                self.nbatch,
+            )
+        )
+        snapshot.append("bond dimensions:")
+        a = int(np.sqrt(self.mps_len))
+        if self.mps_len % a == 0:
+            a *= len(str(self.bond_dimension.max())) + 2
+            snapshot.append(
+                np.array2string(self.bond_dimension, precision=0, max_line_width=a)
+            )
+        else:
+            snapshot.append(np.array2string(self.bond_dimension, precision=0))
+        if len(self.losses) > 0:
+            snapshot.append("loss=%1.6e" % self.losses[-1][-1])
+
+        snapshot.append("cutoff\tn_loop\tn_descent\tlearning_rate\tn_batch")
+        for cutoff, loops, steps, step_size, nbatch in self.trainhistory:
+            snapshot.append(
+                f"{cutoff:1.2e}\t{loops}\t{steps}\t\t{step_size:1.2e}\t{nbatch}"
+            )
+
+        return "\n".join(snapshot) + "\n\n"
+
     def saveMPS(self, save_dir):
-        """Saving all the information of the MPS into a folder
-        The name of the folder is defaultly set as:
-            save_dir + strftime('MPS_%H%M_%d_%b'), about the moment you save it
-        but you can also override the timestamp, which means the name will be:
-            save_dir + 'MPS'
+        """
+        Saving all the information of the MPS into a folder
         """
         assert self.merged_matrix is None
 
-        with open(save_dir + "MPS.log", "w") as f:
-            f.write("Present State of MPS:\n")
-            f.write(
-                "space_size=%d,\ncutoff=%1.5e,\tlr=%1.5e,\tnstep=%d\tnbatch=%d\n"
-                % (
-                    self.space_size,
-                    self.cutoff,
-                    self.descenting_step_length,
-                    self.descent_steps,
-                    self.nbatch,
-                )
-            )
-            f.write("bond dimensions:\n")
-            a = int(np.sqrt(self.space_size))
-            if self.space_size % a == 0:
-                a *= len(str(self.bond_dimension.max())) + 2
-                f.write(
-                    np.array2string(self.bond_dimension, precision=0, max_line_width=a)
-                )
-            else:
-                f.write(np.array2string(self.bond_dimension, precision=0))
-            if len(self.losses) > 0:
-                f.write("\nloss=%1.6e\n" % self.losses[-1][-1])
+        # Add to log file with high-level summary of state of training
+        with open(save_dir + "train.log", "a") as f:
+            f.write(self.train_snapshot())
 
-            f.write("cutoff\tn_loop\tn_descent\tlearning_rate\tn_batch\n")
-            for cutoff, loops, steps, step_size, nbatch in self.trainhistory:
-                f.write(
-                    f"{cutoff:1.2e}\t{loops}\t{steps}\t\t{step_size:1.2e}\t{nbatch}\n"
-                )
-
-        np.save(save_dir + "Cutoff.npy", self.cutoff)
-        np.save(save_dir + "Loss.npy", asarray(self.losses))
-        np.save(save_dir + "Bondim.npy", self.bond_dimension)
-        np.save(save_dir + "TrainHistory.npy", asarray(self.trainhistory))
-        np.save(save_dir + "CurrentBond.npy", self.current_bond)
-
-        # Create object to save matrices via np.savez_compressed
-        digits = len(str(self.space_size))
-        mat_dict = {f"mat_{i:0{digits}d}": mat for i, mat in enumerate(self.matrices)}
-        np.savez_compressed(save_dir + "Matrices.npz", **mat_dict)
+        # Save the whole MPS in a pickle file
+        # with open("mps.model", "wb") as f:
+        with gzip.open(save_dir + "mps.model", "wb") as f:
+            pickle.dump(self, f)
 
     def loadMPS(self, srch_pwd=None):
-        """Loading a MPS from directory `srch_pwd'. If it is None, then search at current working directory"""
+        """
+        Loading a MPS from directory `srch_pwd'. If it is None, then search at current working directory
+        """
         if srch_pwd is not None:
             oripwd = os.getcwd()
             os.chdir(srch_pwd)
         self.bond_dimension = np.load("Bondim.npy")
-        self.space_size = len(self.bond_dimension)
+        self.mps_len = len(self.bond_dimension)
         self.trainhistory = np.load("TrainHistory.npy").tolist()
         self.losses = np.load("Loss.npy").tolist()
         try:
             self.current_bond = int(np.load("CurrentBond.npy"))
         except FileNotFoundError:
-            self.current_bond = self.space_size - 2
-            # most MPS are saved after a loop, when current_bond is space_size-2
+            self.current_bond = self.mps_len - 2
+            # most MPS are saved after a loop, when current_bond is mps_len-2
         try:
             last = self.trainhistory[-1]
             try:
@@ -446,11 +484,11 @@ class MPS_c:
                     self.cutoff,
                     _,
                     self.descent_steps,
-                    self.descenting_step_length,
+                    self.step_size,
                     self.nbatch,
                 ) = last
             except ValueError:
-                self.cutoff, _, self.descent_steps, self.descenting_step_length = last
+                self.cutoff, _, self.descent_steps, self.step_size = last
             self.descent_steps = int(self.descent_steps)
             self.nbatch = int(self.nbatch)
         except:
@@ -463,7 +501,7 @@ class MPS_c:
             mat_dict = np.load("Matrices.npz")
             self.matrices = [mat_dict[k] for k in sorted(mat_dict.keys())]
         except:
-            self.matrices = [np.load("Mat_%d.npy" % i) for i in range(self.space_size)]
+            self.matrices = [np.load("Mat_%d.npy" % i) for i in range(self.mps_len)]
 
         self.merged_matrix = None
         if srch_pwd is not None:
@@ -477,14 +515,14 @@ class MPS_c:
             # There's a merged tensor
             nsam = states.shape[0]
             k = self.current_bond
-            kp1 = (k + 1) % self.space_size
+            kp1 = (k + 1) % self.mps_len
             left_vecs = np.ones((nsam, 1))
             right_vecs = np.ones((1, nsam))
             for i in range(0, k):
                 left_vecs = einsum(
                     "ij,jik->ik", left_vecs, self.matrices[i][:, states[:, i], :]
                 )
-            for i in range(self.space_size - 1, k + 1, -1):
+            for i in range(self.mps_len - 1, k + 1, -1):
                 right_vecs = einsum(
                     "jik,ki->ji", self.matrices[i][:, states[:, i], :], right_vecs
                 )
@@ -501,7 +539,7 @@ class MPS_c:
             # except IndexError:
             #     print(self.matrices[0].shape, states)
             #     sys.exit(-10)
-            for n in range(1, self.space_size - 1):
+            for n in range(1, self.mps_len - 1):
                 left_vecs = einsum(
                     "ij,jil->il", left_vecs, self.matrices[n][:, states[:, n], :]
                 )
@@ -519,23 +557,23 @@ class MPS_c:
             2) Conditioned sampling: m.generate_sample((l, r), array([s_l,s_{l+1},...,s_{r-1}]))
                 array([s_l,s_{l+1},...,s_{r-1}]) is given, and (l,r) designates the location of this segment
         """
-        state = np.empty((self.space_size,), dtype=np.int8)
+        state = np.empty((self.mps_len,), dtype=np.int8)
         if given_seg is None:
-            if self.current_bond != self.space_size - 1:
+            if self.current_bond != self.mps_len - 1:
                 print(
                     "Warning: MPS should have been left canonicalized, when generating samples"
                 )
                 self.left_cano()
                 print("Left-canonicalized, but please add left_cano before generation.")
-            vec = asarray([1])
-            for p in range(self.space_size - 1, -1, -1):
-                vec_act = dot(self.matrices[p][:, 1], vec)
+            vec = np.asarray([1])
+            for p in range(self.mps_len - 1, -1, -1):
+                vec_act = np.dot(self.matrices[p][:, 1], vec)
                 if rand() < (norm(vec_act) / norm(vec)) ** 2:
                     state[p] = 1
                     vec = vec_act
                 else:
                     state[p] = 0
-                    vec = dot(self.matrices[p][:, 0], vec)
+                    vec = np.dot(self.matrices[p][:, 0], vec)
         else:
             l, r = given_seg
             # assign the given segment
@@ -551,10 +589,10 @@ class MPS_c:
                     self.rebuild_bond(going_right=True, keep_bdims=True)
             vec = self.matrices[l][:, state[l], :]
             for p in range(l + 1, r):
-                vec = dot(vec, self.matrices[p][:, state[p], :])
+                vec = np.dot(vec, self.matrices[p][:, state[p], :])
                 vec /= norm(vec)
-            for p in range(r, self.space_size):
-                vec_act = dot(vec, self.matrices[p][:, 1])
+            for p in range(r, self.mps_len):
+                vec_act = np.dot(vec, self.matrices[p][:, 1])
                 # if rand() < (norm(vec_act) / norm(vec))**2:
                 if rand() < norm(vec_act) ** 2:
                     # activate
@@ -563,17 +601,17 @@ class MPS_c:
                 else:
                     # keep 0
                     state[p] = 0
-                    vec = dot(vec, self.matrices[p][:, 0])
+                    vec = np.dot(vec, self.matrices[p][:, 0])
                 vec /= norm(vec)
             for p in range(l - 1, -1, -1):
-                vec_act = dot(self.matrices[p][:, 1], vec)
+                vec_act = np.dot(self.matrices[p][:, 1], vec)
                 # if rand() < (norm(vec_act) / norm(vec))**2:
                 if rand() < norm(vec_act) ** 2:
                     state[p] = 1
                     vec = vec_act
                 else:
                     state[p] = 0
-                    vec = dot(self.matrices[p][:, 0], vec)
+                    vec = np.dot(self.matrices[p][:, 0], vec)
                 vec /= norm(vec)
         return state
 
@@ -585,33 +623,33 @@ class MPS_c:
         Usage:
             If the generation starts from scratch, just keep stat=None and givn_msk=None;
             else please assign
-                givn_msk: an numpy.array whose shape is (space_size,) and dtype=bool
+                givn_msk: an numpy.array whose shape is (mps_len,) and dtype=bool
                 to specify which of the bits are given, and
-                stat: an numpy.array whose shape is (space_size,) and dtype=numpy.int8
+                stat: an numpy.array whose shape is (mps_len,) and dtype=numpy.int8
                 to specify the configuration of the given bits, the other bits will be ignored.
 
         """
         # <<<case: Start from scratch
         if stat is None or givn_msk is None or givn_msk.any() == False:
-            if self.current_bond != self.space_size - 1:
+            if self.current_bond != self.mps_len - 1:
                 self.left_cano()
-            state = np.empty((self.space_size,), dtype=np.int8)
-            vec = asarray([1])
-            for p in np.arange(self.space_size)[::-1]:
-                vec_act = dot(self.matrices[p][:, 1], vec)
+            state = np.empty((self.mps_len,), dtype=np.int8)
+            vec = np.asarray([1])
+            for p in np.arange(self.mps_len)[::-1]:
+                vec_act = np.dot(self.matrices[p][:, 1], vec)
                 if rand() < (norm(vec_act) / norm(vec)) ** 2:
                     state[p] = 1
                     vec = vec_act
                 else:
                     state[p] = 0
-                    vec = dot(self.matrices[p][:, 0], vec)
+                    vec = np.dot(self.matrices[p][:, 0], vec)
             return state
         # case: Start from scratch>>>
 
         state = stat.copy()
         state[givn_msk == False] = -1
         givn_mask = givn_msk.copy()
-        p = self.space_size - 1
+        p = self.mps_len - 1
         while givn_mask[p] == False:
             p -= 1
         p_uncan = p
@@ -642,7 +680,7 @@ class MPS_c:
         # plft points on the leftmost given bit
 
         p = plft
-        while p < self.space_size and givn_mask[p]:
+        while p < self.mps_len and givn_mask[p]:
             p += 1
         plft2 = p - 1
         # Since plft is a given bit, there's a segment of bits that plft is in. plft2 points on the right edge of this segment
@@ -651,10 +689,10 @@ class MPS_c:
         if plft2 == p_uncan:
             vec = self.matrices[plft][:, state[plft], :]
             for p in range(plft + 1, plft2 + 1):
-                vec = dot(vec, self.matrices[p][:, state[p], :])
+                vec = np.dot(vec, self.matrices[p][:, state[p], :])
                 vec /= norm(vec)
-            for p in range(plft2 + 1, self.space_size):
-                vec_act = dot(vec, self.matrices[p][:, 1])
+            for p in range(plft2 + 1, self.mps_len):
+                vec_act = np.dot(vec, self.matrices[p][:, 1])
                 nom = norm(vec_act)
                 if rand() < nom ** 2:
                     # activate
@@ -663,17 +701,17 @@ class MPS_c:
                 else:
                     # keep 0
                     state[p] = 0
-                    vec = dot(vec, self.matrices[p][:, 0])
+                    vec = np.dot(vec, self.matrices[p][:, 0])
                     vec /= norm(vec)
             for p in np.arange(plft)[::-1]:
-                vec_act = dot(self.matrices[p][:, 1], vec)
+                vec_act = np.dot(self.matrices[p][:, 1], vec)
                 nom = norm(vec_act)
                 if rand() < nom ** 2:
                     state[p] = 1
                     vec = vec_act / nom
                 else:
                     state[p] = 0
-                    vec = dot(self.matrices[p][:, 0], vec)
+                    vec = np.dot(self.matrices[p][:, 0], vec)
                     vec /= norm(vec)
             # assert (state!=-1).all()
             return state
@@ -699,7 +737,7 @@ class MPS_c:
             )
             left_vec /= np.trace(left_vec)
 
-        right_vecs = np.empty((self.space_size), dtype=object)
+        right_vecs = np.empty((self.mps_len), dtype=object)
         p = p_uncan
         right_vecs[p] = einsum(
             "ij,kj->ik", self.matrices[p][:, state[p]], self.matrices[p][:, state[p]]
@@ -764,7 +802,7 @@ class MPS_c:
             p += 1
 
         # Sampling the ungiven segment that connects to the right end
-        while p < self.space_size:
+        while p < self.mps_len:
             left_vec_act = einsum(
                 "pl,lq->pq",
                 einsum("jl,jp->pl", left_vec, self.matrices[p][:, 1]),
@@ -805,3 +843,52 @@ class MPS_c:
                 self.rebuild_bond(going_right=(direction == 1), keep_bdims=True)
                 if update_cumulant:
                     self.update_cumulants(direction == 1)
+
+
+def loadMPS(save_file):
+    """
+    Load a saved MPS from a Pickle file
+    """
+    with gzip.open(save_file, "rb") as f:
+        return pickle.load(f)
+
+
+def find_last_file(search_dir, pattern, return_number=True, return_path=True):
+    """
+    Search among files or directories matching a pattern, find the last one
+
+    The pattern will always involve some numerical substring, which is used as
+    the ranking criteria. If no files exist with
+
+    Args:
+        search_dir: The directory which will be searched (non-recursively) for
+            objects matching the desired pattern
+        pattern: Regular expression containing a single group matching digits,
+            to be fed into `re.compile`
+        return_number: Whether to return the number associated with the file
+        return_path: Whether to return the path to the file
+
+    Returns:
+        number: The number associated with the file
+        path: The path of the file
+    """
+    if search_dir[-1] != "/":
+        search_dir += "/"
+    assert os.path.isdir(search_dir)
+    assert return_number or return_path
+    file_list = os.listdir(search_dir)
+    regex = re.compile(pattern)
+    matches = [regex.match(f) for f in file_list]
+    if any(matches):
+        idx, m = max(enumerate(matches), key=lambda x: int(x[1].groups()[0]))
+        num = int(m.groups()[0])
+        path = search_dir + file_list[idx]
+    else:
+        num, path = -1, ""
+
+    if return_number and return_path:
+        return num, path
+    elif return_number:
+        return num
+    else:
+        return path

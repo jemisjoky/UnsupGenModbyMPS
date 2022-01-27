@@ -63,7 +63,7 @@ def denoise_clamp_bars(imgs):
     Reconstruct the top eleven rows from the rest;
     Reconstruct row 11-16 from the rest;
     Reconstruct the bottom eleven rows from the rest"""
-    states = imgs.reshape((-1, m.space_size))
+    states = imgs.reshape((-1, m.mps_len))
 
     gmasks = np.zeros((3, length_a, length_a), dtype=bool)
     gmasks[0, 11:] = True
@@ -119,7 +119,7 @@ def test_denoise(imgs, level):
 def test_complement_1(imgs, given_mask, descript):
     """Notice: CANONICALIZE the MPS firstly will be significantly helpful in efficiency, especially when reconstructin right or tail"""
     m.verbose = 0
-    states = imgs.reshape(-1, m.space_size)
+    states = imgs.reshape(-1, m.mps_len)
     ans = np.asarray([m.generate_sample_1(st, given_mask.ravel()) for st in states])
     ans.shape = (-1, length_a, length_a)
     np.save("reconstr_%s.npy" % (descript), ans)
