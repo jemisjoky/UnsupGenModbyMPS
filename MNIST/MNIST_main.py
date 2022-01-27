@@ -50,13 +50,13 @@ def loss_plot(mps, spars):
     plt.savefig("Loss.pdf")
 
 
-def newest_exp():
+def find_latest_exp():
     """
     Find the most recent MPS experiment in MPS experiments folder
 
     Returns the index of this MPS experiment
     """
-    return find_last_file(run_dir, exp_prefix + r"(\d+)", return_path=False)
+    return find_last_file(run_dir, exp_prefix + r"(\d+)")
 
 
 def find_latest_MPS(exp_folder):
@@ -65,7 +65,24 @@ def find_latest_MPS(exp_folder):
 
     Returns the index and path of the latest checkpoint file
     """
-    return find_last_file(exp_folder, chk_prefix + r"(\d+)")
+    return find_last_file(exp_folder, chk_prefix + r"(\d+)\.model")
+
+
+def print_loss(loop_num, loss):
+    """
+    Print the latest loss attained by the MPS model
+    """
+    # MPS can be given as second arg, since loss is easy to extract
+    if isinstance(loss, MPS_c):
+        loss = loss.losses[-1][1]
+
+    # Initial printing has different format
+    if loop_num == 0:
+        print(f"{init_header} {loss:.5f}")
+    else:
+        header_str = f"Loop {loop_num} loss:"
+        header_str += " " * (len(init_header) - len(header_str))
+        print(f"{header_str} {loss:.5f}")
 
 
 def init(warmup_loops=1):
@@ -75,7 +92,7 @@ def init(warmup_loops=1):
     # Create experiment directory
     if not os.path.isdir(run_dir):
         os.mkdir(run_dir)
-    exp_num = newest_exp() + 1
+    exp_num = find_latest_exp()[0] + 1
     new_dir = run_dir + f"{exp_prefix}{exp_num}/"
     os.mkdir(new_dir)
     # with open("DATA_" + dataset_name.split("/")[-1] + ".txt", "w") as f:
@@ -87,83 +104,67 @@ def init(warmup_loops=1):
     mps.designate_data(dtset)
     mps.init_cumulants()
     mps.nbatch = 10
-    mps.step_size = 0.05
+    mps.lr = 0.05
     mps.descent_steps = 10
     mps.cutoff = 0.3
 
-    # Train model for one loop, comparing initial and final losses
-    loss = mps.get_train_loss()
-    print(f"{init_header} {loss:.5f}")
-    num_loops = 1
-    cut_rec = mps.train(num_loops, rec_cut=True)
-    mps.cutoff = cut_rec
-    header_str = f"Loop {num_loops} loss:"
-    header_str += " " * (len(init_header) - len(header_str))
-    print(f"{header_str} {mps.losses[-1][1]:.5f}")
+    # Optionally train model, comparing initial and final losses
+    print_loss(0, mps.get_train_loss())
+    if warmup_loops > 0:
+        cut_rec = mps.train(warmup_loops, rec_cut=True)
+        mps.cutoff = cut_rec
+        print_loss(warmup_loops, mps)
 
-    save_dir = new_dir + f"{chk_prefix}{num_loops-1}/"
-    os.mkdir(save_dir)
-    mps.saveMPS(save_dir)
-
-    return mps
+    mps.saveMPS(f"{new_dir}{chk_prefix}{warmup_loops}.model")
 
 
 def continue_train(lr_shrink, loopmax, safe_thres=0.5, lr_inf=1e-10):
     """
     Continue the training, in a fixed cutoff, train until loopmax is finished
     """
-    exp_num = newest_exp()
+    # Find the current state of most recent MPS and load it
+    exp_num, exp_folder = find_latest_exp()
     assert exp_num >= 0
-    last_loop, folder = find_latest_MPS(run_dir + f"{exp_prefix}{exp_num}/")
-    if last_loop > 0:
-        print("Resuming:", folder)
-    mps.loadMPS("Loop%dMPS" % last_loop)
-
-    dtset = np.load(dataset_name)
-    mps.designate_data(dtset)
-    nlp = 5
-    mps.verbose = 0
-    # mps.descent_steps = 10
-    mps.init_cumulants()
-    # mps.verbose = 1
-    # mps.cutoff = 1e-7
+    loop_num, save_path = find_latest_MPS(exp_folder)
+    if loop_num > 0:
+        print(f"Resuming: Loop {loop_num + 1}")
+    mps = loadMPS(save_path, dataset_path=dataset_name)
 
     """Set the hyperparameters here"""
-    mps.maxibond = 800
-    mps.nbatch = 20
+    nlp = 5
+    mps.maxibond = 100
     mps.descent_steps = 10
-    mps.step_size = 0.001
+    mps.lr = 0.001
+    # mps.nbatch = 20
+    # mps.verbose = 0
+    # mps.cutoff = 1e-7
 
-    lr = mps.step_size
-    while last_loop < loopmax:
+    while loop_num < loopmax:
         if mps.minibond > 1 and mps.bond_dimension.mean() > 10:
             mps.minibond = 1
             print("From now bondDmin=1")
 
-        # train tentatively
+        # Train the model while testing to see if learning rate is too large
         loss_last = mps.losses[-1][-1]
-        while True:
-            try:
-                mps.train(nlp, rec_cut=False)
-                if mps.losses[-1][-1] - loss_last > safe_thres:
-                    print("lr=%1.3e is too large to continue safely" % lr)
-                    raise Exception("lr=%1.3e is too large to continue safely" % lr)
-            except:
-                lr *= lr_shrink
-                if lr < lr_inf:
-                    print("lr becomes negligible.")
+        good_lr = False
+        while not good_lr:
+            mps.train(nlp, rec_cut=False)
+            if mps.losses[-1][-1] - loss_last > safe_thres:
+                new_lr = mps.lr * lr_shrink
+                print(f"lr={mps.lr:1.3e} is too large, decreasing to lr={new_lr:1.3e}")
+                mps.lr = new_lr
+                if mps.lr < lr_inf:
+                    print("lr is negligible, ending training")
                     return
-                mps.loadMPS("Loop%dMPS" % last_loop)
-                mps.designate_data(dtset)
-                mps.init_cumulants()
-                mps.step_size = lr
-            else:
-                break
 
-        last_loop += nlp
-        assert False
-        mps.saveMPS("Loop%d" % last_loop)  # TODO: Give this a real directory to save in
-        print("Loop%d Saved" % last_loop)
+                # Load the last saved MPS and run it again with the reduced lr
+                mps = loadMPS(find_latest_MPS(exp_folder)[1], dataset_path=dataset_name)
+                mps.lr = lr
+            else:
+                good_lr = True
+                loop_num += nlp
+                mps.saveMPS(f"{exp_folder}{chk_prefix}{loop_num}.model")
+                print_loss(loop_num, mps)
 
 
 if __name__ == "__main__":
@@ -174,7 +175,7 @@ if __name__ == "__main__":
     mnist_dir = "./MNIST/"
     run_dir = mnist_dir + "rand1k_runs/"  # Location of experiment logs
     exp_prefix = "mnist1k_"  # Prefix for individual experiment directories
-    chk_prefix = "Loop_"  # Prefix for individual experiment checkpoints
+    chk_prefix = "mps_loop_"  # Prefix for individual experiment checkpoints
     dataset_name = mnist_dir + "mnist-rand1k_28_thr50_z/_data.npy"
 
     # Random global variables
@@ -182,14 +183,10 @@ if __name__ == "__main__":
 
     if argv[1] == "init":
         mps = init()
-        # locs = np.asarray([t[0] for t in mps.losses])
-        # losses = np.asarray([t[1] for t in mps.losses])
-        # plt.plot(locs, losses)
-        # plt.show()
     elif argv[1] in ["train_from_scratch", "continue"]:
         # Initialize a new model if we're not continuing
         if argv[1] == "train_from_scratch":
-            init(warmup_loops=0)
+            init(warmup_loops=1)
         if len(argv) > 2:
             num_loops = argv[2]
         else:
@@ -201,3 +198,8 @@ if __name__ == "__main__":
     # # loss_plot(mps, True)
     # np.random.seed(1996)
     # sample_plot(mps, "z", 20)
+
+    # locs = np.asarray([t[0] for t in mps.losses])
+    # losses = np.asarray([t[1] for t in mps.losses])
+    # plt.plot(locs, losses)
+    # plt.show()

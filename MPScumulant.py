@@ -49,7 +49,7 @@ class MPS_c:
         self.mps_len = mps_len
         self.in_dim = in_dim
         self.cutoff = 0.01
-        self.step_size = 0.1
+        self.lr = 0.1
         self.descent_steps = 10
         self.verbose = 1
         self.nbatch = 1
@@ -317,7 +317,7 @@ class MPS_c:
         gradient /= self.batchsize
         gradient -= 2 * self.merged_matrix
 
-        self.merged_matrix += gradient * self.step_size
+        self.merged_matrix += gradient * self.lr
         self.merged_matrix /= norm(self.merged_matrix)
 
     def update_cumulants(self, gone_right_just_now):
@@ -392,7 +392,7 @@ class MPS_c:
                 self.cutoff,
                 loops,
                 self.descent_steps,
-                self.step_size,
+                self.lr,
                 self.nbatch,
             ]
         )
@@ -421,7 +421,7 @@ class MPS_c:
             % (
                 self.mps_len,
                 self.cutoff,
-                self.step_size,
+                self.lr,
                 self.descent_steps,
                 self.nbatch,
             )
@@ -446,66 +446,33 @@ class MPS_c:
 
         return "\n".join(snapshot) + "\n\n"
 
-    def saveMPS(self, save_dir):
+    def saveMPS(self, save_path):
         """
-        Saving all the information of the MPS into a folder
+        Saving compressed form of MPS object at designated path
+
+        The dataset being trained on and cumulants derived from that dataset
+        aren't included in the MPS saved on disk
         """
         assert self.merged_matrix is None
 
-        # Add to log file with high-level summary of state of training
-        with open(save_dir + "train.log", "a") as f:
-            f.write(self.train_snapshot())
+        # # Add to log file with high-level summary of state of training
+        # with open(save_dir + "train.log", "a") as f:
+        #     f.write(self.train_snapshot())
+
+        # Store temporary attributes of MPS, so they can be restored post-save
+        temp_attrs = ["cumulants", "data"]
+        stash_dict = {attr: getattr(self, attr) for attr in temp_attrs}
+        for attr in temp_attrs:
+            delattr(self, attr)
 
         # Save the whole MPS in a pickle file
         # with open("mps.model", "wb") as f:
-        with gzip.open(save_dir + "mps.model", "wb") as f:
+        with gzip.open(save_path, "wb") as f:
             pickle.dump(self, f)
 
-    def loadMPS(self, srch_pwd=None):
-        """
-        Loading a MPS from directory `srch_pwd'. If it is None, then search at current working directory
-        """
-        if srch_pwd is not None:
-            oripwd = os.getcwd()
-            os.chdir(srch_pwd)
-        self.bond_dimension = np.load("Bondim.npy")
-        self.mps_len = len(self.bond_dimension)
-        self.trainhistory = np.load("TrainHistory.npy").tolist()
-        self.losses = np.load("Loss.npy").tolist()
-        try:
-            self.current_bond = int(np.load("CurrentBond.npy"))
-        except FileNotFoundError:
-            self.current_bond = self.mps_len - 2
-            # most MPS are saved after a loop, when current_bond is mps_len-2
-        try:
-            last = self.trainhistory[-1]
-            try:
-                (
-                    self.cutoff,
-                    _,
-                    self.descent_steps,
-                    self.step_size,
-                    self.nbatch,
-                ) = last
-            except ValueError:
-                self.cutoff, _, self.descent_steps, self.step_size = last
-            self.descent_steps = int(self.descent_steps)
-            self.nbatch = int(self.nbatch)
-        except:
-            pass
-        try:
-            self.cutoff = float(np.load("Cutoff.npy"))
-        except:
-            pass
-        try:
-            mat_dict = np.load("Matrices.npz")
-            self.matrices = [mat_dict[k] for k in sorted(mat_dict.keys())]
-        except:
-            self.matrices = [np.load("Mat_%d.npy" % i) for i in range(self.mps_len)]
-
-        self.merged_matrix = None
-        if srch_pwd is not None:
-            os.chdir(oripwd)
+        # Restore the temporary attributes
+        for attr, value in stash_dict.items():
+            setattr(self, attr, value)
 
     def Give_psi(self, states):
         """Calculate the corresponding psi for configuration `states'"""
@@ -845,12 +812,19 @@ class MPS_c:
                     self.update_cumulants(direction == 1)
 
 
-def loadMPS(save_file):
+def loadMPS(save_file, dataset_path=None):
     """
-    Load a saved MPS from a Pickle file
+    Load a saved MPS from a Pickle file and possibly initialize it with data
     """
     with gzip.open(save_file, "rb") as f:
-        return pickle.load(f)
+        mps = pickle.load(f)
+
+    if dataset_path is not None:
+        dataset = np.load(dataset_path)
+        mps.designate_data(dataset)
+        mps.init_cumulants()
+
+    return mps
 
 
 def find_last_file(search_dir, pattern, return_number=True, return_path=True):
