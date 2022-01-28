@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
+import re
 from sys import path, argv
 
 import numpy as np
@@ -7,7 +8,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MultipleLocator
 
-from MPScumulant import MPS_c, find_last_file, loadMPS
+from MPScumulant import MPS_c, loadMPS
 
 # path.append("../")
 # mpl.use("Agg")
@@ -50,6 +51,52 @@ def loss_plot(mps, spars):
     plt.savefig("Loss.pdf")
 
 
+def find_last_file(search_dir, pattern, return_number=True, return_path=True):
+    """
+    Search among files or directories matching a pattern, find the last one
+
+    The pattern will always involve some numerical substring, which is used as
+    the ranking criteria. If no files exist with
+
+    Args:
+        search_dir: The directory which will be searched (non-recursively) for
+            objects matching the desired pattern
+        pattern: Regular expression containing a single group matching digits,
+            to be fed into `re.compile`
+        return_number: Whether to return the number associated with the file
+        return_path: Whether to return the path to the file
+
+    Returns:
+        number: The number associated with the file
+        path: The path of the file
+    """
+    if search_dir[-1] != "/":
+        search_dir += "/"
+    assert os.path.isdir(search_dir)
+    assert return_number or return_path
+    file_list = os.listdir(search_dir)
+    regex = re.compile(pattern)
+    matches = [regex.match(f) for f in file_list]
+    if any(matches):
+        idx, m = max(enumerate(matches), key=lambda x: int(x[1].groups()[0]))
+        num = int(m.groups()[0])
+        path = search_dir + file_list[idx]
+
+        # Proper formatting for directories
+        assert os.path.exists(path)
+        if os.path.isdir(path) and path[-1] != "/":
+            path += "/"
+    else:
+        num, path = -1, ""
+
+    if return_number and return_path:
+        return num, path
+    elif return_number:
+        return num
+    else:
+        return path
+
+
 def find_latest_exp():
     """
     Find the most recent MPS experiment in MPS experiments folder
@@ -65,24 +112,37 @@ def find_latest_MPS(exp_folder):
 
     Returns the index and path of the latest checkpoint file
     """
-    return find_last_file(exp_folder, chk_prefix + r"(\d+)\.model")
+    return find_last_file(exp_folder, chk_prefix + r"(\d+)" + chk_suffix)
 
 
-def print_loss(loop_num, loss):
+def print_status(loop_num, mps):
     """
-    Print the latest loss attained by the MPS model
+    Print the latest loss and bond dimensions attained by the MPS model
     """
     # MPS can be given as second arg, since loss is easy to extract
-    if isinstance(loss, MPS_c):
-        loss = loss.losses[-1][1]
+    assert isinstance(mps, MPS_c)
 
-    # Initial printing has different format
+    # Dictionary containing all the info to print
+    to_print = {}
+
+    # Very first loss evaluation has different format
     if loop_num == 0:
-        print(f"{init_header} {loss:.5f}")
+        to_print["Initial loss:"] = mps.losses[-1][1]
     else:
-        header_str = f"Loop {loop_num} loss:"
-        header_str += " " * (len(init_header) - len(header_str))
-        print(f"{header_str} {loss:.5f}")
+        to_print[f"Loop {loop_num} loss:"] = mps.losses[-1][1]
+
+    # Maximum and mean bond dimension
+    bond_dims = mps.bond_dimension
+    to_print["  Max bond dim:"] = max(bond_dims)
+    to_print["  Mean bond dim:"] = sum(bond_dims) / len(bond_dims)
+
+    # Do the actual printing
+    head_width = max(len(k) for k in to_print.keys())
+    float_format = "{0:<{w}} {1:.5f}"
+    int_format = "{0:<{w}} {1}"
+    for head, value in to_print.items():
+        format_str = float_format if isinstance(value, float) else int_format
+        print(format_str.format(head, value, w=head_width))
 
 
 def init(warmup_loops=1):
@@ -109,13 +169,15 @@ def init(warmup_loops=1):
     mps.cutoff = 0.3
 
     # Optionally train model, comparing initial and final losses
-    print_loss(0, mps.get_train_loss())
+    mps.get_train_loss()
+    print_status(0, mps)
     if warmup_loops > 0:
         cut_rec = mps.train(warmup_loops, rec_cut=True)
         mps.cutoff = cut_rec
-        print_loss(warmup_loops, mps)
+        print_status(warmup_loops, mps)
 
-    mps.saveMPS(f"{new_dir}{chk_prefix}{warmup_loops}.model")
+    # mps.saveMPS(f"{new_dir}{chk_prefix}{warmup_loops}{chk_suffix}")
+    mps.saveMPS(savefile_template.format(new_dir, warmup_loops))
 
 
 def continue_train(lr_shrink, loopmax, safe_thres=0.5, lr_inf=1e-10):
@@ -131,18 +193,17 @@ def continue_train(lr_shrink, loopmax, safe_thres=0.5, lr_inf=1e-10):
     mps = loadMPS(save_path, dataset_path=dataset_name)
 
     """Set the hyperparameters here"""
-    nlp = 5
-    mps.maxibond = 100
+    nlp = 1
+    mps.maxibond = 10
     mps.descent_steps = 10
     mps.lr = 0.001
+    mps.cutoff = 1e-7
     # mps.nbatch = 20
-    # mps.verbose = 0
-    # mps.cutoff = 1e-7
 
     while loop_num < loopmax:
-        if mps.minibond > 1 and mps.bond_dimension.mean() > 10:
-            mps.minibond = 1
-            print("From now bondDmin=1")
+        # if mps.minibond > 1 and mps.bond_dimension.mean() > 10:
+        #     mps.minibond = 1
+        #     print("From now bondDmin=1")
 
         # Train the model while testing to see if learning rate is too large
         loss_last = mps.losses[-1][-1]
@@ -163,8 +224,10 @@ def continue_train(lr_shrink, loopmax, safe_thres=0.5, lr_inf=1e-10):
             else:
                 good_lr = True
                 loop_num += nlp
-                mps.saveMPS(f"{exp_folder}{chk_prefix}{loop_num}.model")
-                print_loss(loop_num, mps)
+                mps.saveMPS(savefile_template.format(exp_folder, loop_num))
+                print_status(loop_num, mps)
+                if any(bd > 40 for bd in mps.bond_dimension):
+                    mps.verbose = 2
 
 
 if __name__ == "__main__":
@@ -176,10 +239,9 @@ if __name__ == "__main__":
     run_dir = mnist_dir + "rand1k_runs/"  # Location of experiment logs
     exp_prefix = "mnist1k_"  # Prefix for individual experiment directories
     chk_prefix = "mps_loop_"  # Prefix for individual experiment checkpoints
+    chk_suffix = ".model.gz"  # Suffix for individual experiment checkpoints
     dataset_name = mnist_dir + "mnist-rand1k_28_thr50_z/_data.npy"
-
-    # Random global variables
-    init_header = "Initial loss:"  # Header for printing initial loss
+    savefile_template = "{}mps_loop_{:03d}.model.gz"
 
     if argv[1] == "init":
         mps = init()

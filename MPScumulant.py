@@ -4,7 +4,6 @@ class MPS cumulant
 @author: congzlwag
 """
 import os
-import re
 import sys
 import pickle
 
@@ -17,6 +16,7 @@ from numpy.linalg import norm, svd
 # from scipy.linalg import norm, svd
 
 DEBUG_LIST = []
+
 
 class MPS_c:
     def __init__(self, mps_len, in_dim=2):
@@ -130,7 +130,7 @@ class MPS_c:
 
         if self.verbose > 1:
             print("bond:", k)
-            print(s)
+            # print(s)
 
         if not keep_bdims:
             bdmax = min(self.maxibond, s.size)
@@ -267,9 +267,9 @@ class MPS_c:
         k = self.current_bond
         kp1 = (k + 1) % self.mps_len
         km1 = (k - 1) % self.mps_len
-        # 
-        left_vecs = self.cumulants[k][indx, :]      # shape = (batchsize, D)
-        right_vecs = self.cumulants[kp1][:, indx]   # shape = (D, batchsize)
+        #
+        left_vecs = self.cumulants[k][indx, :]  # shape = (batchsize, D)
+        right_vecs = self.cumulants[kp1][:, indx]  # shape = (D, batchsize)
 
         # Batch of rank-1 matrices containing left and right environments
         phi_mat = einsum("ij,ki->ijk", left_vecs, right_vecs)
@@ -305,7 +305,7 @@ class MPS_c:
         # left and right environments for each datum, along with the (one-hot
         # encoded) input vectors associated with each datum at sites k and k+1.
         # Each one of these is rescaled by the inverse of the probability
-        # amplitude associated with a datum, and then they are all averaged 
+        # amplitude associated with a datum, and then they are all averaged
         # together. A factor of the merged matrix is subtracted from
         # this before gradient before it is applied to the merged matrix, and
         # the result is finally normalized so the merged matrix has unit norm.
@@ -825,44 +825,3 @@ def loadMPS(save_file, dataset_path=None):
         mps.init_cumulants()
 
     return mps
-
-
-def find_last_file(search_dir, pattern, return_number=True, return_path=True):
-    """
-    Search among files or directories matching a pattern, find the last one
-
-    The pattern will always involve some numerical substring, which is used as
-    the ranking criteria. If no files exist with
-
-    Args:
-        search_dir: The directory which will be searched (non-recursively) for
-            objects matching the desired pattern
-        pattern: Regular expression containing a single group matching digits,
-            to be fed into `re.compile`
-        return_number: Whether to return the number associated with the file
-        return_path: Whether to return the path to the file
-
-    Returns:
-        number: The number associated with the file
-        path: The path of the file
-    """
-    if search_dir[-1] != "/":
-        search_dir += "/"
-    assert os.path.isdir(search_dir)
-    assert return_number or return_path
-    file_list = os.listdir(search_dir)
-    regex = re.compile(pattern)
-    matches = [regex.match(f) for f in file_list]
-    if any(matches):
-        idx, m = max(enumerate(matches), key=lambda x: int(x[1].groups()[0]))
-        num = int(m.groups()[0])
-        path = search_dir + file_list[idx]
-    else:
-        num, path = -1, ""
-
-    if return_number and return_path:
-        return num, path
-    elif return_number:
-        return num
-    else:
-        return path

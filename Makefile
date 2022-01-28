@@ -21,3 +21,7 @@ continue:
 .PHONY: rm-all-runs
 rm-all-runs:
 	rm -r MNIST/rand1k_runs/*
+
+.PHONY: rm-intermediate
+rm-intermediate:
+	python3 -m utils rm_intermediate
