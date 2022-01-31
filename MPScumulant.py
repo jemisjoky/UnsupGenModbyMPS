@@ -165,19 +165,19 @@ class MPS_c:
         # Pad the singular values and singular matrices if needed
         if len(s) < new_bd:
             new_s = np.zeros((new_bd,), dtype=s.dtype)
-            new_s[:len(s)] = s
+            new_s[: len(s)] = s
             s = new_s
         else:
             s = s[:new_bd]
         if U.shape[1] < new_bd:
             new_U = np.zeros((U.shape[0], new_bd), dtype=U.dtype)
-            new_U[:, :U.shape[1]] = U
+            new_U[:, : U.shape[1]] = U
             U = new_U
         else:
             U = U[:, :new_bd]
         if V.shape[0] < new_bd:
             new_V = np.zeros((new_bd, V.shape[1]), dtype=V.dtype)
-            new_V[:V.shape[0]] = V
+            new_V[: V.shape[0]] = V
             V = new_V
         else:
             V = V[:new_bd, :]

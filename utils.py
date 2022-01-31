@@ -9,6 +9,8 @@ def rm_intermediate_checkpoints(exp_dir="./MNIST/rand1k_runs/"):
         folder = f"{exp_dir}{folder}/"
         file_list = sorted(os.listdir(folder))
         for file in file_list[:-1]:
+            if file.endswith(".json"):
+                continue
             os.remove(folder + file)
 
 

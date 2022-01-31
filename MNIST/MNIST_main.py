@@ -224,10 +224,12 @@ def train(
         test_loss = mps.get_test_loss(TEST_SET)
         loop_num = 0
         step_count = 1  # Calcuation of initial training loss counts as step
-        
+
         print_status(loop_num, mps, test_loss)
         if LOGGER is not None:
-            LOGGER.log_metrics({"train_loss": mps.losses[-1][-1], "test_loss": test_loss}, epoch=0)
+            LOGGER.log_metrics(
+                {"train_loss": mps.losses[-1][-1], "test_loss": test_loss}, epoch=0
+            )
 
     while loop_num < epochs:
         # if mps.minibond > 1 and mps.bond_dims.mean() > 10:
@@ -250,7 +252,9 @@ def train(
                     return
 
                 # Load the last saved MPS and run it again with the reduced lr
-                mps = loadMPS(find_latest_MPS(exp_folder)[1], dataset_path=TRAIN_SET_NAME)
+                mps = loadMPS(
+                    find_latest_MPS(exp_folder)[1], dataset_path=TRAIN_SET_NAME
+                )
                 mps.lr = lr
 
             # Otherwise save the model and keep going
@@ -299,67 +303,85 @@ if __name__ == "__main__":
     assert len(argv) > 1
 
     ### Hyperparameters for the experiment ###
-    # MPS hyperparameters
-    MIN_BDIM = 1
-    MAX_BDIM = 10
-    INIT_BDIM = 2
-    SV_CUTOFF = 1e-7
-    STEPS_PER_EPOCH = 2 * (28 ** 2) - 4
+    for MAX_BDIM in [10, 20, 30, 40, 70, 100, 150, 200, 300, 400, 500]:
+        # MPS hyperparameters
+        MIN_BDIM = 1
+        # MAX_BDIM = 10
+        INIT_BDIM = 2
+        SV_CUTOFF = 1e-7
+        STEPS_PER_EPOCH = 2 * (28 ** 2) - 4
 
-    # Training hyperparameters
-    LR = 1e-3
-    NBATCH = 10
-    EPOCHS = 50
-    VERBOSITY = 1
-    LR_SHRINK = 0.95
-    MIN_LR = 1e-10
-    COMET_LOG = False
-    # COMET_LOG = True
-    PROJECT_NAME = "hanetal-source-v1"
-    EXP_NAME = f"bd{MAX_BDIM}_bdi{INIT_BDIM}_cut{SV_CUTOFF:1.0e}"
-    SAVE_INTERMEDIATE = False
-    ORIGINAL_DATASET = True
-    SEED = 0
+        # Training hyperparameters
+        LR = 1e-3
+        NBATCH = 10
+        EPOCHS = 50
+        VERBOSITY = 1
+        LR_SHRINK = 0.95
+        MIN_LR = 1e-10
+        # COMET_LOG = False
+        COMET_LOG = True
+        PROJECT_NAME = "hanetal-source-v2"
+        EXP_NAME = f"bd{MAX_BDIM}_bdi{INIT_BDIM}_cut{SV_CUTOFF:1.0e}"
+        SAVE_INTERMEDIATE = False
+        ORIGINAL_DATASET = True
+        SEED = 0
 
-    # Save hyperparameters, setup Comet logger
-    PARAM_DICT = {k.lower(): v for k, v in globals().items() if k.upper() == k}
-    if COMET_LOG:
-        LOGGER = Experiment(project_name=PROJECT_NAME)
-        LOGGER.log_parameters(PARAM_DICT)
-        LOGGER.set_name(EXP_NAME)
-    else:
-        LOGGER = None
+        # Save hyperparameters, setup Comet logger
+        if "PARAM_DICT" in globals().keys():
+            vars_to_delete = [
+                "PARAM_DICT",
+                "LOGGER",
+                "MNIST_DIR",
+                "RUN_DIR",
+                "EXP_PREFIX",
+                "TRAIN_SET_NAME",
+                "TEST_SET_NAME",
+                "SAVEFILE_TEMPLATE",
+                "SAVEFILE_REGEX",
+                "TRAIN_SET",
+                "TEST_SET",
+            ]
+            assert all(var in globals().keys() for var in vars_to_delete)
+            for var in vars_to_delete:
+                del globals()[var]
+        PARAM_DICT = {k.lower(): v for k, v in globals().items() if k.upper() == k}
+        if COMET_LOG:
+            LOGGER = Experiment(project_name=PROJECT_NAME)
+            LOGGER.log_parameters(PARAM_DICT)
+            LOGGER.set_name(EXP_NAME)
+        else:
+            LOGGER = None
 
-    # Relevant directories for the random 1k images experiment
-    MNIST_DIR = "./MNIST/"
-    RUN_DIR = MNIST_DIR + "rand1k_runs/"  # Location of experiment logs
-    EXP_PREFIX = "mnist1k_"  # Prefix for individual experiment directories
-    TRAIN_SET_NAME = MNIST_DIR + "mnist-rand1k_28_thr50_z/paper_data.npy"
-    TEST_SET_NAME = MNIST_DIR + "mnist-rand1k_28_thr50_z/first1k_test.npy"
-    SAVEFILE_TEMPLATE = "{}mps_loop_{:03d}.model.gz"
-    SAVEFILE_REGEX = r"mps_loop_(\d+)\.model\.gz"
+        # Relevant directories for the random 1k images experiment
+        MNIST_DIR = "./MNIST/"
+        RUN_DIR = MNIST_DIR + "rand1k_runs/"  # Location of experiment logs
+        EXP_PREFIX = "mnist1k_"  # Prefix for individual experiment directories
+        TRAIN_SET_NAME = MNIST_DIR + "mnist-rand1k_28_thr50_z/paper_data.npy"
+        TEST_SET_NAME = MNIST_DIR + "mnist-rand1k_28_thr50_z/first1k_test.npy"
+        SAVEFILE_TEMPLATE = "{}mps_loop_{:03d}.model.gz"
+        SAVEFILE_REGEX = r"mps_loop_(\d+)\.model\.gz"
 
-    # Load 1000 random MNIST images
-    TRAIN_SET = np.load(TRAIN_SET_NAME)
-    TEST_SET = np.load(TEST_SET_NAME)
+        # Load 1000 random MNIST images
+        TRAIN_SET = np.load(TRAIN_SET_NAME)
+        TEST_SET = np.load(TEST_SET_NAME)
 
-    if argv[1] == "init":
-        mps = init()
-    elif argv[1] in ["train_from_scratch", "continue"]:
-        # Initialize a new model if we're not continuing
-        continue_last = argv[1] == "continue"
-        train(EPOCHS, continue_last=continue_last)
+        if argv[1] == "init":
+            mps = init()
+        elif argv[1] in ["train_from_scratch", "continue"]:
+            # Initialize a new model if we're not continuing
+            continue_last = argv[1] == "continue"
+            train(EPOCHS, continue_last=continue_last)
 
-        # if argv[1] == "train_from_scratch":
-        # init(warmup_loops=1)
-    # elif argv[1] == "plot":
-    #     mps.loadMPS("./Loop%dMPS" % int(argv[2]))
+            # if argv[1] == "train_from_scratch":
+            # init(warmup_loops=1)
+        # elif argv[1] == "plot":
+        #     mps.loadMPS("./Loop%dMPS" % int(argv[2]))
 
-    # # loss_plot(mps, True)
-    # np.random.seed(1996)
-    # sample_plot(mps, "z", 20)
+        # # loss_plot(mps, True)
+        # np.random.seed(1996)
+        # sample_plot(mps, "z", 20)
 
-    # locs = np.asarray([t[0] for t in mps.losses])
-    # losses = np.asarray([t[1] for t in mps.losses])
-    # plt.plot(locs, losses)
-    # plt.show()
+        # locs = np.asarray([t[0] for t in mps.losses])
+        # losses = np.asarray([t[1] for t in mps.losses])
+        # plt.plot(locs, losses)
+        # plt.show()
