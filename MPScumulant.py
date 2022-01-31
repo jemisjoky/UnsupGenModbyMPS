@@ -27,7 +27,6 @@ class MPS_c:
         min_bd=1,
         init_bd=2,
         seed=1,
-        logger=None,
     ):
         """
         MPS class, with cumulant technique, efficient in DMRG-2
@@ -43,8 +42,6 @@ class MPS_c:
             min_bd: minimum allowed bond dimension
             init_bd: dimension of bonds at initialization
             seed: random seed used to set model parameters
-            logger: Comet_ml datalogger, which will be used to track training
-                if specified
 
             bond_dims: list of bond dimensions, with bond_dims[i] connects i & i+1
             matrices: list of the tensors A^{(k)}
@@ -72,7 +69,6 @@ class MPS_c:
         assert min_bd <= init_bd
         self.min_bd = min_bd
         self.max_bd = max_bd
-        self.logger = logger
 
         # Initialize bond dimensions and MPS core tensors
         self.bond_dims = init_bd * np.ones((mps_len,), dtype=np.int16)
@@ -358,7 +354,7 @@ class MPS_c:
                 self.cumulants[k + 2],
             )
 
-    def bond_train(self, going_right=True, rec_cut=False, calc_loss=False):
+    def bond_train(self, going_right=True, rec_cut=False, calc_loss=True):
         """Training on current_bond
         going_right & rec_cut: see rebuild_bond
         calc_loss: whether get_train_loss is called.
@@ -369,7 +365,7 @@ class MPS_c:
         self.batchsize = self.data.shape[0] // self.nbatch
         for n in range(self.nbatch):
             self.gradient_descent_cumulants(batch_id=(batch_start + n) % self.nbatch)
-        # self.get_train_loss()#Before cutoff
+
         cut_recommend = self.rebuild_bond(going_right, rec_cut=rec_cut)
         self.update_cumulants(gone_right_just_now=going_right)
         if calc_loss:
@@ -387,22 +383,18 @@ class MPS_c:
 
             # Initial right-to-left optimization sweep
             for bond in range(self.mps_len - 2, 0, -1):
-                out = self.bond_train(
-                    going_right=False, calc_loss=True, rec_cut=record_cr
-                )
+                out = self.bond_train(going_right=False, rec_cut=record_cr)
                 if record_cr and bond == self.mps_len - 2:
                     cut_rec = [out]
-                self.log_batch_loss(self.losses[-1][-1], bond)
+                # self.log_batch_loss(self.losses[-1][-1], bond)
                 # self.bond_train(going_right=False, calc_loss=(bond == 1))
 
             # Following left-to-right optimization sweep
             for bond in range(0, self.mps_len - 2):
-                out = self.bond_train(
-                    going_right=True, calc_loss=True, rec_cut=record_cr
-                )
+                out = self.bond_train(going_right=True, rec_cut=record_cr)
                 if record_cr:
                     cut_rec.append(out)
-                self.log_batch_loss(self.losses[-1][-1], bond)
+                # self.log_batch_loss(self.losses[-1][-1], bond)
                 # going_right=True, calc_loss=(bond == self.mps_len - 3)
 
             # print("Current Loss: %.9f\nBondim:" % self.losses[-1][-1])
@@ -432,12 +424,12 @@ class MPS_c:
                 # print("Recommend cutoff for next loop:", "Keep current value")
                 return self.cutoff
 
-    def log_batch_loss(loss, bond):
-        """
-        If logger is set, log the loss associated with local optimization step
-        """
-        if self.logger is not None:
-            self.logger.log_metrics({"batch_loss": loss, "current_bond": bond})
+    # def log_batch_loss(self, loss, bond, logger):
+    #     """
+    #     If logger is set, log the loss associated with local optimization step
+    #     """
+    #     if logger is not None:
+    #         logger.log_metrics({"batch_loss": loss, "current_bond": bond})
 
     def train_snapshot(self):
         """
@@ -541,6 +533,12 @@ class MPS_c:
     def Give_probab(self, states):
         """Calculate the corresponding probability for configuration `states'"""
         return np.abs(self.Give_psi(states)) ** 2
+
+    def get_test_loss(self, test_set):
+        """
+        Get the NLL averaged on the test set
+        """
+        return -np.log(self.Give_probab(test_set)).mean()
 
     def generate_sample(self, given_seg=None, *arg):
         """

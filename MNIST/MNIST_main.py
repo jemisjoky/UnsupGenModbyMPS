@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import os
 import re
+import json
 from sys import path, argv
 
 import numpy as np
@@ -79,7 +80,9 @@ def find_last_file(search_dir, pattern, return_number=True, return_path=True):
     regex = re.compile(pattern)
     matches = [regex.match(f) for f in file_list]
     if any(matches):
-        idx, m = max(enumerate(matches), key=lambda x: int(x[1].groups()[0]))
+        idx, m = max(
+            enumerate([m for m in matches if m]), key=lambda x: int(x[1].groups()[0])
+        )
         num = int(m.groups()[0])
         path = search_dir + file_list[idx]
 
@@ -113,10 +116,10 @@ def find_latest_MPS(exp_folder):
 
     Returns the index and path of the latest checkpoint file
     """
-    return find_last_file(exp_folder, chk_prefix + r"(\d+)" + chk_suffix)
+    return find_last_file(exp_folder, SAVEFILE_REGEX)
 
 
-def print_status(loop_num, mps):
+def print_status(loop_num, mps, test_loss):
     """
     Print the latest loss and bond dimensions attained by the MPS model
     """
@@ -128,11 +131,12 @@ def print_status(loop_num, mps):
 
     # Very first loss evaluation has different format
     if loop_num == 0:
-        to_print["Initial loss:"] = mps.losses[-1][1]
+        to_print["Initial train loss:"] = mps.losses[-1][1]
     else:
-        to_print[f"Loop {loop_num} loss:"] = mps.losses[-1][1]
+        to_print[f"Loop {loop_num} train loss:"] = mps.losses[-1][1]
 
     # Maximum and mean bond dimension
+    to_print["  Test loss:"] = test_loss
     to_print["  Max bond dim:"] = max(mps.bond_dims)
     to_print["  Mean bond dim:"] = sum(mps.bond_dims) / len(mps.bond_dims)
 
@@ -151,12 +155,12 @@ def init(warmup_loops=1):
     if not os.path.isdir(RUN_DIR):
         os.mkdir(RUN_DIR)
     exp_num = find_latest_exp()[0] + 1
-    new_dir = RUN_DIR + f"{EXP_PREFIX}{exp_num}/"
-    os.mkdir(new_dir)
+    exp_folder = RUN_DIR + f"{EXP_PREFIX}{exp_num}/"
+    os.mkdir(exp_folder)
 
     # Initialize model
     mps = MPS_c(28 * 28)
-    mps.designate_data(DATASET)
+    mps.designate_data(TRAIN_SET)
     mps.nbatch = 10
     mps.lr = 0.05
     mps.cutoff = 0.3
@@ -169,8 +173,8 @@ def init(warmup_loops=1):
         mps.cutoff = cut_rec
         print_status(warmup_loops, mps)
 
-    # mps.saveMPS(f"{new_dir}{chk_prefix}{warmup_loops}{chk_suffix}")
-    mps.saveMPS(SAVEFILE_TEMPLATE.format(new_dir, warmup_loops))
+    # mps.saveMPS(f"{exp_folder}{chk_prefix}{warmup_loops}{chk_suffix}")
+    mps.saveMPS(SAVEFILE_TEMPLATE.format(exp_folder, warmup_loops))
 
 
 def train(
@@ -187,7 +191,8 @@ def train(
         loop_num, save_path = find_latest_MPS(exp_folder)
         if loop_num > 0:
             print(f"Resuming: Loop {loop_num + 1}")
-        mps = loadMPS(save_path, dataset_path=DATASET_NAME)
+        mps = loadMPS(save_path, dataset_path=TRAIN_SET_NAME)
+        step_count = len(mps.losses)
 
     # Initialize a new MPS with desired hyperparameters
     else:
@@ -195,29 +200,34 @@ def train(
         if not os.path.isdir(RUN_DIR):
             os.mkdir(RUN_DIR)
         exp_num = find_latest_exp()[0] + 1
-        new_dir = RUN_DIR + f"{EXP_PREFIX}{exp_num}/"
-        os.mkdir(new_dir)
+        exp_folder = RUN_DIR + f"{EXP_PREFIX}{exp_num}/"
+        os.mkdir(exp_folder)
+
+        # Log the experimental parameters in the folder
+        with open(f"{exp_folder}{EXP_NAME}.json", "w") as f:
+            json.dump(PARAM_DICT, f, indent=4)
 
         # Initialize model
         mps = MPS_c(
             28 ** 2,
             cutoff=SV_CUTOFF,
             lr=LR,
+            nbatch=NBATCH,
             verbose=VERBOSITY,
             max_bd=MAX_BDIM,
             min_bd=MIN_BDIM,
             init_bd=INIT_BDIM,
             seed=SEED,
-            logger=LOGGER,
         )
-        mps.designate_data(DATASET)
-
-    """Set the hyperparameters here"""
-    nlp = 1
-    mps.maxibond = 10
-    mps.lr = 0.001
-    mps.cutoff = 1e-7
-    mps.nbatch = 10
+        mps.designate_data(TRAIN_SET)
+        mps.get_train_loss()
+        test_loss = mps.get_test_loss(TEST_SET)
+        loop_num = 0
+        step_count = 1  # Calcuation of initial training loss counts as step
+        
+        print_status(loop_num, mps, test_loss)
+        if LOGGER is not None:
+            LOGGER.log_metrics({"train_loss": mps.losses[-1][-1], "test_loss": test_loss}, epoch=0)
 
     while loop_num < epochs:
         # if mps.minibond > 1 and mps.bond_dims.mean() > 10:
@@ -225,8 +235,8 @@ def train(
         #     print("From now bondDmin=1")
 
         # Train the model while testing to see if learning rate is too large
-        loss_last = mps.losses[-1][-1]
         good_lr = False
+        loss_last = mps.losses[-1][-1]
         while not good_lr:
             mps.train(num_epochs=1, rec_cut=False)
 
@@ -240,17 +250,48 @@ def train(
                     return
 
                 # Load the last saved MPS and run it again with the reduced lr
-                mps = loadMPS(find_latest_MPS(exp_folder)[1], dataset_path=DATASET_NAME)
+                mps = loadMPS(find_latest_MPS(exp_folder)[1], dataset_path=TRAIN_SET_NAME)
                 mps.lr = lr
 
             # Otherwise save the model and keep going
             else:
                 good_lr = True
-                loop_num += nlp
+                loop_num += 1
+                test_loss = mps.get_test_loss(TEST_SET)
+                print_status(loop_num, mps, test_loss)
+                last_loop, last_path = find_latest_MPS(exp_folder)
                 mps.saveMPS(SAVEFILE_TEMPLATE.format(exp_folder, loop_num))
-                print_status(loop_num, mps)
                 # if any(bd > 40 for bd in mps.bond_dims):
                 #     mps.verbose = 2
+
+                # If we're not keeping intermediate states, remove the last one
+                if not SAVE_INTERMEDIATE:
+                    this_loop, _ = find_latest_MPS(exp_folder)
+                    if last_loop > -1:
+                        assert this_loop == last_loop + 1
+                        os.remove(last_path)
+
+                # Log the data
+                if LOGGER is not None:
+                    assert len(mps.losses[step_count:]) % STEPS_PER_EPOCH == 0
+                    for step, (bond, loss) in enumerate(mps.losses[step_count:]):
+                        LOGGER.log_metrics(
+                            {"current_bond": bond, "batch_loss": loss},
+                            step=(step_count + step),
+                            epoch=loop_num,
+                        )
+                    LOGGER.log_metrics(
+                        {
+                            "train_loss": mps.losses[-1][-1],
+                            "test_loss": test_loss,
+                            "max_bd": max(mps.bond_dims),
+                            "min_bd": min(mps.bond_dims),
+                            "mean_bd": sum(mps.bond_dims) / len(mps.bond_dims),
+                        },
+                        epoch=loop_num,
+                    )
+
+                step_count = len(mps.losses)
 
 
 if __name__ == "__main__":
@@ -263,22 +304,29 @@ if __name__ == "__main__":
     MAX_BDIM = 10
     INIT_BDIM = 2
     SV_CUTOFF = 1e-7
+    STEPS_PER_EPOCH = 2 * (28 ** 2) - 4
 
     # Training hyperparameters
     LR = 1e-3
+    NBATCH = 10
     EPOCHS = 100
     VERBOSITY = 1
     LR_SHRINK = 0.95
     MIN_LR = 1e-10
-    COMET_LOG = False
-    EXP_NAME = "hanetal-source-v1"
+    # COMET_LOG = False
+    COMET_LOG = True
+    PROJECT_NAME = "hanetal-source-v1"
+    EXP_NAME = f"bd{MAX_BDIM}_bdi{INIT_BDIM}_cut{SV_CUTOFF:1.0e}"
     SAVE_INTERMEDIATE = False
+    ORIGINAL_DATASET = True
+    SEED = 0
 
     # Save hyperparameters, setup Comet logger
-    param_dict = {k.lower(): v for k, v in globals().items() if k.upper() == k}
+    PARAM_DICT = {k.lower(): v for k, v in globals().items() if k.upper() == k}
     if COMET_LOG:
-        LOGGER = Experiment(project_name=EXP_NAME)
-        LOGGER.log_parameters(param_dict)
+        LOGGER = Experiment(project_name=PROJECT_NAME)
+        LOGGER.log_parameters(PARAM_DICT)
+        LOGGER.set_name(EXP_NAME)
     else:
         LOGGER = None
 
@@ -286,23 +334,24 @@ if __name__ == "__main__":
     MNIST_DIR = "./MNIST/"
     RUN_DIR = MNIST_DIR + "rand1k_runs/"  # Location of experiment logs
     EXP_PREFIX = "mnist1k_"  # Prefix for individual experiment directories
-    DATASET_NAME = MNIST_DIR + "mnist-rand1k_28_thr50_z/_data.npy"
+    TRAIN_SET_NAME = MNIST_DIR + "mnist-rand1k_28_thr50_z/paper_data.npy"
+    TEST_SET_NAME = MNIST_DIR + "mnist-rand1k_28_thr50_z/first1k_test.npy"
     SAVEFILE_TEMPLATE = "{}mps_loop_{:03d}.model.gz"
+    SAVEFILE_REGEX = r"mps_loop_(\d+)\.model\.gz"
 
     # Load 1000 random MNIST images
-    DATASET = np.load(DATASET_NAME)
+    TRAIN_SET = np.load(TRAIN_SET_NAME)
+    TEST_SET = np.load(TEST_SET_NAME)
 
     if argv[1] == "init":
         mps = init()
     elif argv[1] in ["train_from_scratch", "continue"]:
         # Initialize a new model if we're not continuing
-        if argv[1] == "train_from_scratch":
-            init(warmup_loops=1)
-        if len(argv) > 2:
-            num_loops = argv[2]
-        else:
-            num_loops = 250
-        continue_train(0.9, num_loops, 0.05)
+        continue_last = argv[1] == "continue"
+        train(EPOCHS, continue_last=continue_last)
+
+        # if argv[1] == "train_from_scratch":
+        # init(warmup_loops=1)
     # elif argv[1] == "plot":
     #     mps.loadMPS("./Loop%dMPS" % int(argv[2]))
 
