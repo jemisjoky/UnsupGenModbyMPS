@@ -148,24 +148,43 @@ class MPS_c:
 
         if not keep_bdims:
             bdmax = min(self.max_bd, s.size)
-            l = self.min_bd
-            while l < bdmax and s[l] >= s[0] * self.cutoff:
-                l += 1
-            # Found l: s[:l] dominate after cut off
+            new_bd = self.min_bd
+            while new_bd < bdmax and s[new_bd] >= s[0] * self.cutoff:
+                new_bd += 1
+            # Found new_bd: s[:new_bd] dominate after cut off
         else:
-            l = self.bond_dims[k]
+            new_bd = self.bond_dims[k]
             # keep bond dimension
 
         if rec_cut:
-            if l >= bdmax:
+            if new_bd >= bdmax:
                 cut_recommend = -1.0
             else:
-                cut_recommend = s[l] / s[0]
-        s = np.diag(s[:l])
-        U = U[:, :l]
-        V = V[:l, :]
+                cut_recommend = s[new_bd] / s[0]
+
+        # Pad the singular values and singular matrices if needed
+        if len(s) < new_bd:
+            new_s = np.zeros((new_bd,), dtype=s.dtype)
+            new_s[:len(s)] = s
+            s = new_s
+        else:
+            s = s[:new_bd]
+        if U.shape[1] < new_bd:
+            new_U = np.zeros((U.shape[0], new_bd), dtype=U.dtype)
+            new_U[:, :U.shape[1]] = U
+            U = new_U
+        else:
+            U = U[:, :new_bd]
+        if V.shape[0] < new_bd:
+            new_V = np.zeros((new_bd, V.shape[1]), dtype=V.dtype)
+            new_V[:V.shape[0]] = V
+            V = new_V
+        else:
+            V = V[:new_bd, :]
+
+        s = np.diag(s)
         bdm_last = self.bond_dims[k]
-        self.bond_dims[k] = l
+        self.bond_dims[k] = new_bd
 
         if going_right:
             V = np.dot(s, V)
@@ -176,12 +195,12 @@ class MPS_c:
 
         if not keep_bdims:
             if self.verbose > 1:
-                print("Bondim %d->%d" % (bdm_last, l))
+                print("Bondim %d->%d" % (bdm_last, new_bd))
 
         self.matrices[k] = U.reshape(
-            (self.bond_dims[(k - 1) % self.mps_len], self.in_dim, l)
+            (self.bond_dims[(k - 1) % self.mps_len], self.in_dim, new_bd)
         )
-        self.matrices[kp1] = V.reshape((l, self.in_dim, self.bond_dims[kp1]))
+        self.matrices[kp1] = V.reshape((new_bd, self.in_dim, self.bond_dims[kp1]))
 
         self.current_bond += 1 if going_right else -1
         self.merged_matrix = None

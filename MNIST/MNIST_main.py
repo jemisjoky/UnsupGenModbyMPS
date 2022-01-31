@@ -309,12 +309,12 @@ if __name__ == "__main__":
     # Training hyperparameters
     LR = 1e-3
     NBATCH = 10
-    EPOCHS = 100
+    EPOCHS = 50
     VERBOSITY = 1
     LR_SHRINK = 0.95
     MIN_LR = 1e-10
-    # COMET_LOG = False
-    COMET_LOG = True
+    COMET_LOG = False
+    # COMET_LOG = True
     PROJECT_NAME = "hanetal-source-v1"
     EXP_NAME = f"bd{MAX_BDIM}_bdi{INIT_BDIM}_cut{SV_CUTOFF:1.0e}"
     SAVE_INTERMEDIATE = False
