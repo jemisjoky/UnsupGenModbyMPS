@@ -7,6 +7,7 @@ import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MultipleLocator
+from comet_ml import Experiment
 
 from MPScumulant import MPS_c, loadMPS
 
@@ -103,7 +104,7 @@ def find_latest_exp():
 
     Returns the index of this MPS experiment
     """
-    return find_last_file(run_dir, exp_prefix + r"(\d+)")
+    return find_last_file(RUN_DIR, EXP_PREFIX + r"(\d+)")
 
 
 def find_latest_MPS(exp_folder):
@@ -132,9 +133,8 @@ def print_status(loop_num, mps):
         to_print[f"Loop {loop_num} loss:"] = mps.losses[-1][1]
 
     # Maximum and mean bond dimension
-    bond_dims = mps.bond_dimension
-    to_print["  Max bond dim:"] = max(bond_dims)
-    to_print["  Mean bond dim:"] = sum(bond_dims) / len(bond_dims)
+    to_print["  Max bond dim:"] = max(mps.bond_dims)
+    to_print["  Mean bond dim:"] = sum(mps.bond_dims) / len(mps.bond_dims)
 
     # Do the actual printing
     head_width = max(len(k) for k in to_print.keys())
@@ -147,61 +147,80 @@ def print_status(loop_num, mps):
 
 def init(warmup_loops=1):
     """Start the training, in a relatively high cutoff, over usually just 1 epoch"""
-    dtset = np.load(dataset_name)
-
     # Create experiment directory
-    if not os.path.isdir(run_dir):
-        os.mkdir(run_dir)
+    if not os.path.isdir(RUN_DIR):
+        os.mkdir(RUN_DIR)
     exp_num = find_latest_exp()[0] + 1
-    new_dir = run_dir + f"{exp_prefix}{exp_num}/"
+    new_dir = RUN_DIR + f"{EXP_PREFIX}{exp_num}/"
     os.mkdir(new_dir)
-    # with open("DATA_" + dataset_name.split("/")[-1] + ".txt", "w") as f:
-    #  f.write(dataset_name)
 
     # Initialize model
     mps = MPS_c(28 * 28)
-    mps.left_cano()
-    mps.designate_data(dtset)
-    mps.init_cumulants()
+    mps.designate_data(DATASET)
     mps.nbatch = 10
     mps.lr = 0.05
-    mps.descent_steps = 10
     mps.cutoff = 0.3
 
     # Optionally train model, comparing initial and final losses
     mps.get_train_loss()
     print_status(0, mps)
     if warmup_loops > 0:
-        cut_rec = mps.train(warmup_loops, rec_cut=True)
+        cut_rec = mps.train(num_epochs=warmup_loops, rec_cut=True)
         mps.cutoff = cut_rec
         print_status(warmup_loops, mps)
 
     # mps.saveMPS(f"{new_dir}{chk_prefix}{warmup_loops}{chk_suffix}")
-    mps.saveMPS(savefile_template.format(new_dir, warmup_loops))
+    mps.saveMPS(SAVEFILE_TEMPLATE.format(new_dir, warmup_loops))
 
 
-def continue_train(lr_shrink, loopmax, safe_thres=0.5, lr_inf=1e-10):
+def train(
+    epochs,
+    continue_last=False,
+):
     """
-    Continue the training, in a fixed cutoff, train until loopmax is finished
+    Initialize and train MPS model on MNIST for given number of epochs
     """
-    # Find the current state of most recent MPS and load it
-    exp_num, exp_folder = find_latest_exp()
-    assert exp_num >= 0
-    loop_num, save_path = find_latest_MPS(exp_folder)
-    if loop_num > 0:
-        print(f"Resuming: Loop {loop_num + 1}")
-    mps = loadMPS(save_path, dataset_path=dataset_name)
+    # Find the state of most recent MPS experiment and load it
+    if continue_last:
+        exp_num, exp_folder = find_latest_exp()
+        assert exp_num >= 0
+        loop_num, save_path = find_latest_MPS(exp_folder)
+        if loop_num > 0:
+            print(f"Resuming: Loop {loop_num + 1}")
+        mps = loadMPS(save_path, dataset_path=DATASET_NAME)
+
+    # Initialize a new MPS with desired hyperparameters
+    else:
+        # Create experiment directory
+        if not os.path.isdir(RUN_DIR):
+            os.mkdir(RUN_DIR)
+        exp_num = find_latest_exp()[0] + 1
+        new_dir = RUN_DIR + f"{EXP_PREFIX}{exp_num}/"
+        os.mkdir(new_dir)
+
+        # Initialize model
+        mps = MPS_c(
+            28 ** 2,
+            cutoff=SV_CUTOFF,
+            lr=LR,
+            verbose=VERBOSITY,
+            max_bd=MAX_BDIM,
+            min_bd=MIN_BDIM,
+            init_bd=INIT_BDIM,
+            seed=SEED,
+            logger=LOGGER,
+        )
+        mps.designate_data(DATASET)
 
     """Set the hyperparameters here"""
     nlp = 1
     mps.maxibond = 10
-    mps.descent_steps = 10
     mps.lr = 0.001
     mps.cutoff = 1e-7
-    # mps.nbatch = 20
+    mps.nbatch = 10
 
-    while loop_num < loopmax:
-        # if mps.minibond > 1 and mps.bond_dimension.mean() > 10:
+    while loop_num < epochs:
+        # if mps.minibond > 1 and mps.bond_dims.mean() > 10:
         #     mps.minibond = 1
         #     print("From now bondDmin=1")
 
@@ -209,39 +228,69 @@ def continue_train(lr_shrink, loopmax, safe_thres=0.5, lr_inf=1e-10):
         loss_last = mps.losses[-1][-1]
         good_lr = False
         while not good_lr:
-            mps.train(nlp, rec_cut=False)
-            if mps.losses[-1][-1] - loss_last > safe_thres:
-                new_lr = mps.lr * lr_shrink
+            mps.train(num_epochs=1, rec_cut=False)
+
+            # If loss is increasing, turn down LR and redo training
+            if mps.losses[-1][-1] > loss_last:
+                new_lr = mps.lr * LR_SHRINK
                 print(f"lr={mps.lr:1.3e} is too large, decreasing to lr={new_lr:1.3e}")
                 mps.lr = new_lr
-                if mps.lr < lr_inf:
+                if mps.lr < MIN_LR:
                     print("lr is negligible, ending training")
                     return
 
                 # Load the last saved MPS and run it again with the reduced lr
-                mps = loadMPS(find_latest_MPS(exp_folder)[1], dataset_path=dataset_name)
+                mps = loadMPS(find_latest_MPS(exp_folder)[1], dataset_path=DATASET_NAME)
                 mps.lr = lr
+
+            # Otherwise save the model and keep going
             else:
                 good_lr = True
                 loop_num += nlp
-                mps.saveMPS(savefile_template.format(exp_folder, loop_num))
+                mps.saveMPS(SAVEFILE_TEMPLATE.format(exp_folder, loop_num))
                 print_status(loop_num, mps)
-                if any(bd > 40 for bd in mps.bond_dimension):
-                    mps.verbose = 2
+                # if any(bd > 40 for bd in mps.bond_dims):
+                #     mps.verbose = 2
 
 
 if __name__ == "__main__":
     # Must be called with at least one command
     assert len(argv) > 1
 
+    ### Hyperparameters for the experiment ###
+    # MPS hyperparameters
+    MIN_BDIM = 1
+    MAX_BDIM = 10
+    INIT_BDIM = 2
+    SV_CUTOFF = 1e-7
+
+    # Training hyperparameters
+    LR = 1e-3
+    EPOCHS = 100
+    VERBOSITY = 1
+    LR_SHRINK = 0.95
+    MIN_LR = 1e-10
+    COMET_LOG = False
+    EXP_NAME = "hanetal-source-v1"
+    SAVE_INTERMEDIATE = False
+
+    # Save hyperparameters, setup Comet logger
+    param_dict = {k.lower(): v for k, v in globals().items() if k.upper() == k}
+    if COMET_LOG:
+        LOGGER = Experiment(project_name=EXP_NAME)
+        LOGGER.log_parameters(param_dict)
+    else:
+        LOGGER = None
+
     # Relevant directories for the random 1k images experiment
-    mnist_dir = "./MNIST/"
-    run_dir = mnist_dir + "rand1k_runs/"  # Location of experiment logs
-    exp_prefix = "mnist1k_"  # Prefix for individual experiment directories
-    chk_prefix = "mps_loop_"  # Prefix for individual experiment checkpoints
-    chk_suffix = ".model.gz"  # Suffix for individual experiment checkpoints
-    dataset_name = mnist_dir + "mnist-rand1k_28_thr50_z/_data.npy"
-    savefile_template = "{}mps_loop_{:03d}.model.gz"
+    MNIST_DIR = "./MNIST/"
+    RUN_DIR = MNIST_DIR + "rand1k_runs/"  # Location of experiment logs
+    EXP_PREFIX = "mnist1k_"  # Prefix for individual experiment directories
+    DATASET_NAME = MNIST_DIR + "mnist-rand1k_28_thr50_z/_data.npy"
+    SAVEFILE_TEMPLATE = "{}mps_loop_{:03d}.model.gz"
+
+    # Load 1000 random MNIST images
+    DATASET = np.load(DATASET_NAME)
 
     if argv[1] == "init":
         mps = init()

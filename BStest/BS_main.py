@@ -69,11 +69,10 @@ if __name__ == "__main__":
     m = MPS_c(16)
     m.left_cano()
     m.designate_data(dataset)
-    m.init_cumulants()
 
     m.cutoff = 5e-5
     m.descent_step_length = 0.05
-    m.descent_steps = 10
+    m.nbatch = 10
     m.train(2)
 
     m.saveMPS("BS-", True)

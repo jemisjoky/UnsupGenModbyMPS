@@ -10,27 +10,43 @@ import pickle
 import gzip
 import numpy as np
 from numpy import einsum
-from numpy.random import rand, seed
+from numpy.random import rand
 from numpy.linalg import norm, svd
-
-# from scipy.linalg import norm, svd
-
-DEBUG_LIST = []
 
 
 class MPS_c:
-    def __init__(self, mps_len, in_dim=2):
+    def __init__(
+        self,
+        mps_len,
+        in_dim=2,
+        cutoff=0.01,
+        lr=0.001,
+        nbatch=10,
+        verbose=1,
+        max_bd=10,
+        min_bd=1,
+        init_bd=2,
+        seed=1,
+        logger=None,
+    ):
         """
         MPS class, with cumulant technique, efficient in DMRG-2
         Attributes:
             mps_len: length of chain
             in_dim: dimension of input to MPS cores
-            cutoff: truncation rate
-            step_size: learning rate
-            nbatch: number of batches
+            cutoff: cutoff value setting minimum allowed singular value (as a
+                fraction of the maximum singular value)
+            lr: learning rate
+            nbatch: number of batches to process the dataset in
+            verbose: level of verbosity (0, 1, or 2)
+            max_bd: maximum allowed bond dimension
+            min_bd: minimum allowed bond dimension
+            init_bd: dimension of bonds at initialization
+            seed: random seed used to set model parameters
+            logger: Comet_ml datalogger, which will be used to track training
+                if specified
 
-            bond_dimension: bond dimensions;
-                bond[i] connects i & i+1
+            bond_dims: list of bond dimensions, with bond_dims[i] connects i & i+1
             matrices: list of the tensors A^{(k)}
             merged_matrix:
                 caches the merged order-4 tensor,
@@ -46,23 +62,23 @@ class MPS_c:
             losses: recorder of (current_bond, loss) tuples
             trainhistory: recorder of training history
         """
+        np.random.seed(seed)
         self.mps_len = mps_len
         self.in_dim = in_dim
-        self.cutoff = 0.01
-        self.lr = 0.1
-        self.descent_steps = 10
-        self.verbose = 1
-        self.nbatch = 1
+        self.cutoff = cutoff
+        self.lr = lr
+        self.nbatch = nbatch
+        self.verbose = verbose
+        assert min_bd <= init_bd
+        self.min_bd = min_bd
+        self.max_bd = max_bd
+        self.logger = logger
 
-        # bond[i] connects i & i+1
-        init_bondim = 2
-        self.minibond = 2
-        self.maxibond = 300
-        self.bond_dimension = init_bondim * np.ones((mps_len,), dtype=np.int16)
-        self.bond_dimension[-1] = 1
-        seed(1)
+        # Initialize bond dimensions and MPS core tensors
+        self.bond_dims = init_bd * np.ones((mps_len,), dtype=np.int16)
+        self.bond_dims[-1] = 1
         self.matrices = [
-            rand(self.bond_dimension[i - 1], self.in_dim, self.bond_dimension[i])
+            rand(self.bond_dims[i - 1], self.in_dim, self.bond_dims[i])
             for i in range(mps_len)
         ]
 
@@ -75,9 +91,11 @@ class MPS_c:
         mps_len-1: left-canonicalized
         """
         self.merged_matrix = None
-
         self.losses = []
         self.trainhistory = []
+
+        # Initialize matrices to be in left canonical form
+        self.left_cano()
 
     def left_cano(self):
         """
@@ -101,13 +119,13 @@ class MPS_c:
             order="C",
         )
 
-    def rebuild_bond(self, going_right, spec=False, cutrec=False, keep_bdims=False):
+    def rebuild_bond(self, going_right, spec=False, rec_cut=False, keep_bdims=False):
         """Decomposition
         going_right: if we're sweeping right or not
         keep_bdims: if the bond dimension is demanded to keep invariant compared with the value before being merged,
             when gauge transformation is carried out, this is often True.
         spec: if the truncated singular values are returned or not
-        cutrec: if a recommended cutoff is returned or not
+        rec_cut: if a recommended cutoff is returned or not
         """
         assert self.merged_matrix is not None
         k = self.current_bond
@@ -115,8 +133,8 @@ class MPS_c:
         U, s, V = svd(
             self.merged_matrix.reshape(
                 (
-                    self.bond_dimension[(k - 1) % self.mps_len] * self.in_dim,
-                    self.in_dim * self.bond_dimension[kp1],
+                    self.bond_dims[(k - 1) % self.mps_len] * self.in_dim,
+                    self.in_dim * self.bond_dims[kp1],
                 )
             )
         )
@@ -133,16 +151,16 @@ class MPS_c:
             # print(s)
 
         if not keep_bdims:
-            bdmax = min(self.maxibond, s.size)
-            l = self.minibond
+            bdmax = min(self.max_bd, s.size)
+            l = self.min_bd
             while l < bdmax and s[l] >= s[0] * self.cutoff:
                 l += 1
             # Found l: s[:l] dominate after cut off
         else:
-            l = self.bond_dimension[k]
+            l = self.bond_dims[k]
             # keep bond dimension
 
-        if cutrec:
+        if rec_cut:
             if l >= bdmax:
                 cut_recommend = -1.0
             else:
@@ -150,8 +168,8 @@ class MPS_c:
         s = np.diag(s[:l])
         U = U[:, :l]
         V = V[:l, :]
-        bdm_last = self.bond_dimension[k]
-        self.bond_dimension[k] = l
+        bdm_last = self.bond_dims[k]
+        self.bond_dims[k] = l
 
         if going_right:
             V = np.dot(s, V)
@@ -165,26 +183,27 @@ class MPS_c:
                 print("Bondim %d->%d" % (bdm_last, l))
 
         self.matrices[k] = U.reshape(
-            (self.bond_dimension[(k - 1) % self.mps_len], self.in_dim, l)
+            (self.bond_dims[(k - 1) % self.mps_len], self.in_dim, l)
         )
-        self.matrices[kp1] = V.reshape((l, self.in_dim, self.bond_dimension[kp1]))
+        self.matrices[kp1] = V.reshape((l, self.in_dim, self.bond_dims[kp1]))
 
         self.current_bond += 1 if going_right else -1
         self.merged_matrix = None
 
         if spec:
-            if cutrec:
+            if rec_cut:
                 return np.diag(s), cut_recommend
             else:
                 return np.diag(s)
         else:
-            if cutrec:
+            if rec_cut:
                 return cut_recommend
 
     def designate_data(self, dataset):
         """Before the training starts, the training set is designated"""
         self.data = dataset.astype(np.int8)
         self.batchsize = self.data.shape[0] // self.nbatch
+        self.init_cumulants()
 
     def init_cumulants(self):
         """
@@ -284,10 +303,10 @@ class MPS_c:
 
         gradient = np.zeros(
             (
-                self.bond_dimension[km1],
+                self.bond_dims[km1],
                 self.in_dim,
                 self.in_dim,
-                self.bond_dimension[kp1],
+                self.bond_dims[kp1],
             )
         )
         psi_inv = 1 / psi
@@ -339,62 +358,65 @@ class MPS_c:
                 self.cumulants[k + 2],
             )
 
-    def __bondtrain__(self, going_right=True, cutrec=False, calc_loss=False):
+    def bond_train(self, going_right=True, rec_cut=False, calc_loss=False):
         """Training on current_bond
-        going_right & cutrec: see rebuild_bond
+        going_right & rec_cut: see rebuild_bond
         calc_loss: whether get_train_loss is called.
         """
         self.merge_bond()
         batch_start = np.random.randint(self.nbatch)
         # batch_start = 0
         self.batchsize = self.data.shape[0] // self.nbatch
-        for n in range(self.descent_steps):
+        for n in range(self.nbatch):
             self.gradient_descent_cumulants(batch_id=(batch_start + n) % self.nbatch)
         # self.get_train_loss()#Before cutoff
-        cut_recommend = self.rebuild_bond(going_right, cutrec=cutrec)
+        cut_recommend = self.rebuild_bond(going_right, rec_cut=rec_cut)
         self.update_cumulants(gone_right_just_now=going_right)
         if calc_loss:
             self.get_train_loss()
-        if cutrec:
+        if rec_cut:
             return cut_recommend
 
-    def train(self, loops, rec_cut=True):
-        """Training over several epoches. `loops' is the number of epoches"""
-        for loop in range(loops - 1 if rec_cut else loops):
-            for bond in range(self.mps_len - 2, 0, -1):
-                # self.__bondtrain__(going_right=False, calc_loss=(bond == 1))
-                self.__bondtrain__(going_right=False, calc_loss=True)
-            for bond in range(0, self.mps_len - 2):
-                self.__bondtrain__(going_right=True, calc_loss=True)
-                # going_right=True, calc_loss=(bond == self.mps_len - 3)
-            # print("Current Loss: %.9f\nBondim:" % self.losses[-1][-1])
-            # print(self.bond_dimension)
+    def train(self, num_epochs=1, rec_cut=True):
+        """
+        Train over several epoches. `num_epochs' is the number of epoches
+        """
+        for loop in range(num_epochs):
+            # cut_rec is recorded only during the last loop
+            record_cr = rec_cut and (loop == num_epochs - 1)
 
-        if rec_cut:
-            # Now loop = loops - 1
-            cut_rec = [self.__bondtrain__(going_right=False, cutrec=True)]
-            for bond in range(self.mps_len - 3, 0, -1):
-                # calc_loss = bond == 1
-                # self.__bondtrain__(going_right=False, calc_loss=calc_loss)
-                self.__bondtrain__(going_right=False, calc_loss=True)
-            for bond in range(0, self.mps_len - 2):
-                # calc_loss = bond == self.mps_len - 3
-                cut_rec.append(
-                    self.__bondtrain__(going_right=True, cutrec=True, calc_loss=True)
+            # Initial right-to-left optimization sweep
+            for bond in range(self.mps_len - 2, 0, -1):
+                out = self.bond_train(
+                    going_right=False, calc_loss=True, rec_cut=record_cr
                 )
-                # going_right=True, cutrec=True, calc_loss=calc_loss
+                if record_cr and bond == self.mps_len - 2:
+                    cut_rec = [out]
+                self.log_batch_loss(self.losses[-1][-1], bond)
+                # self.bond_train(going_right=False, calc_loss=(bond == 1))
+
+            # Following left-to-right optimization sweep
+            for bond in range(0, self.mps_len - 2):
+                out = self.bond_train(
+                    going_right=True, calc_loss=True, rec_cut=record_cr
+                )
+                if record_cr:
+                    cut_rec.append(out)
+                self.log_batch_loss(self.losses[-1][-1], bond)
+                # going_right=True, calc_loss=(bond == self.mps_len - 3)
+
             # print("Current Loss: %.9f\nBondim:" % self.losses[-1][-1])
-            # print(self.bond_dimension)
+            # print(self.bond_dims)
+
         # All loops finished
         # print('Append History')
         self.trainhistory.append(
-            [
+            (
                 self.cutoff,
-                loops,
-                self.descent_steps,
+                num_epochs,
                 self.lr,
                 self.nbatch,
-            ]
+            )
         )
         if rec_cut:
             if self.verbose > 2:
@@ -410,6 +432,13 @@ class MPS_c:
                 # print("Recommend cutoff for next loop:", "Keep current value")
                 return self.cutoff
 
+    def log_batch_loss(loss, bond):
+        """
+        If logger is set, log the loss associated with local optimization step
+        """
+        if self.logger is not None:
+            self.logger.log_metrics({"batch_loss": loss, "current_bond": bond})
+
     def train_snapshot(self):
         """
         Return a text summary of the state of training of the MPS
@@ -417,32 +446,29 @@ class MPS_c:
         snapshot = []
         snapshot.append("Present State of MPS:")
         snapshot.append(
-            "mps_len=%d,\ncutoff=%1.5e,\tlr=%1.5e,\tnstep=%d,\tnbatch=%d"
+            "mps_len=%d,\ncutoff=%1.5e,\tlr=%1.5e,\tnbatch=%d"
             % (
                 self.mps_len,
                 self.cutoff,
                 self.lr,
-                self.descent_steps,
                 self.nbatch,
             )
         )
         snapshot.append("bond dimensions:")
         a = int(np.sqrt(self.mps_len))
         if self.mps_len % a == 0:
-            a *= len(str(self.bond_dimension.max())) + 2
+            a *= len(str(self.bond_dims.max())) + 2
             snapshot.append(
-                np.array2string(self.bond_dimension, precision=0, max_line_width=a)
+                np.array2string(self.bond_dims, precision=0, max_line_width=a)
             )
         else:
-            snapshot.append(np.array2string(self.bond_dimension, precision=0))
+            snapshot.append(np.array2string(self.bond_dims, precision=0))
         if len(self.losses) > 0:
             snapshot.append("loss=%1.6e" % self.losses[-1][-1])
 
         snapshot.append("cutoff\tn_loop\tn_descent\tlearning_rate\tn_batch")
-        for cutoff, loops, steps, step_size, nbatch in self.trainhistory:
-            snapshot.append(
-                f"{cutoff:1.2e}\t{loops}\t{steps}\t\t{step_size:1.2e}\t{nbatch}"
-            )
+        for cutoff, loops, lr, nbatch in self.trainhistory:
+            snapshot.append(f"{cutoff:1.2e}\t{loops}\t{lr:1.2e}\t{nbatch}")
 
         return "\n".join(snapshot) + "\n\n"
 
@@ -822,6 +848,5 @@ def loadMPS(save_file, dataset_path=None):
     if dataset_path is not None:
         dataset = np.load(dataset_path)
         mps.designate_data(dataset)
-        mps.init_cumulants()
 
     return mps
