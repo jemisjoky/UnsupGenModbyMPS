@@ -2,7 +2,9 @@
 import os
 import re
 import json
-from sys import path, argv
+from time import time
+from math import sqrt
+from sys import argv
 
 import numpy as np
 import matplotlib as mpl
@@ -12,6 +14,8 @@ from comet_ml import Experiment
 
 from MPScumulant import MPS_c, loadMPS
 
+# from MPScumulant_torch import MPS_c, loadMPS
+
 # path.append("../")
 # mpl.use("Agg")
 np.set_printoptions(5, linewidth=4 * 28)
@@ -19,7 +23,7 @@ np.set_printoptions(5, linewidth=4 * 28)
 
 def sample_image(mps, typ):
     dat = mps.generate_sample()
-    a = int(np.sqrt(dat.size))
+    a = int(sqrt(dat.size))
     img = dat.reshape((a, a))
     if typ == "s":
         for n in range(1, a, 2):
@@ -28,7 +32,7 @@ def sample_image(mps, typ):
 
 
 def sample_plot(mps, typ, nn):
-    ncol = int(np.sqrt(nn))
+    ncol = int(sqrt(nn))
     while nn % ncol != 0:
         ncol -= 1
     fig, axs = plt.subplots(nn // ncol, ncol)
@@ -119,7 +123,7 @@ def find_latest_MPS(exp_folder):
     return find_last_file(exp_folder, SAVEFILE_REGEX)
 
 
-def print_status(loop_num, mps, test_loss):
+def print_status(loop_num, mps, test_loss, epoch_time):
     """
     Print the latest loss and bond dimensions attained by the MPS model
     """
@@ -139,13 +143,16 @@ def print_status(loop_num, mps, test_loss):
     to_print["  Test loss:"] = test_loss
     to_print["  Max bond dim:"] = max(mps.bond_dims)
     to_print["  Mean bond dim:"] = sum(mps.bond_dims) / len(mps.bond_dims)
+    to_print["  Loop runtime:"] = epoch_time
 
     # Do the actual printing
     head_width = max(len(k) for k in to_print.keys())
-    float_format = "{0:<{w}} {1:.5f}"
-    int_format = "{0:<{w}} {1}"
-    for head, value in to_print.items():
-        format_str = float_format if isinstance(value, float) else int_format
+    loss_format = "{0:<{w}} {1:.5f}"
+    maxbd_format = "{0:<{w}} {1}"
+    meanbd_format = "{0:<{w}} {1:.2f}"
+    time_format = "{0:<{w}} {1:.1f}s"
+    formats = [loss_format] * 2 + [maxbd_format, meanbd_format] + [time_format]
+    for format_str, (head, value) in zip(formats, to_print.items()):
         print(format_str.format(head, value, w=head_width))
 
 
@@ -174,7 +181,8 @@ def init(warmup_loops=1):
         print_status(warmup_loops, mps)
 
     # mps.saveMPS(f"{exp_folder}{chk_prefix}{warmup_loops}{chk_suffix}")
-    mps.saveMPS(SAVEFILE_TEMPLATE.format(exp_folder, warmup_loops))
+    if SAVE_MODEL:
+        mps.saveMPS(SAVEFILE_TEMPLATE.format(exp_folder, warmup_loops))
 
 
 def train(
@@ -197,17 +205,19 @@ def train(
     # Initialize a new MPS with desired hyperparameters
     else:
         # Create experiment directory
-        if not os.path.isdir(RUN_DIR):
-            os.mkdir(RUN_DIR)
-        exp_num = find_latest_exp()[0] + 1
-        exp_folder = RUN_DIR + f"{EXP_PREFIX}{exp_num}/"
-        os.mkdir(exp_folder)
+        if SAVE_MODEL:
+            if not os.path.isdir(RUN_DIR):
+                os.mkdir(RUN_DIR)
+            exp_num = find_latest_exp()[0] + 1
+            exp_folder = RUN_DIR + f"{EXP_PREFIX}{exp_num}/"
+            os.mkdir(exp_folder)
 
-        # Log the experimental parameters in the folder
-        with open(f"{exp_folder}{EXP_NAME}.json", "w") as f:
-            json.dump(PARAM_DICT, f, indent=4)
+            # Log the experimental parameters in the folder
+            with open(f"{exp_folder}{EXP_NAME}.json", "w") as f:
+                json.dump(PARAM_DICT, f, indent=4)
 
         # Initialize model
+        start_time = time()
         mps = MPS_c(
             28 ** 2,
             cutoff=SV_CUTOFF,
@@ -222,10 +232,11 @@ def train(
         mps.designate_data(TRAIN_SET)
         mps.get_train_loss()
         test_loss = mps.get_test_loss(TEST_SET)
+        init_time = time() - start_time
         loop_num = 0
         step_count = 1  # Calcuation of initial training loss counts as step
 
-        print_status(loop_num, mps, test_loss)
+        print_status(loop_num, mps, test_loss, init_time)
         if LOGGER is not None:
             LOGGER.log_metrics(
                 {"train_loss": mps.losses[-1][-1], "test_loss": test_loss}, epoch=0
@@ -240,10 +251,12 @@ def train(
         good_lr = False
         loss_last = mps.losses[-1][-1]
         while not good_lr:
+            start_time = time()
             mps.train(num_epochs=1, rec_cut=False)
+            epoch_time = time() - start_time
 
             # If loss is increasing, turn down LR and redo training
-            if mps.losses[-1][-1] > loss_last:
+            if mps.losses[-1][-1] > loss_last and SAVE_MODEL:
                 new_lr = mps.lr * LR_SHRINK
                 print(f"lr={mps.lr:1.3e} is too large, decreasing to lr={new_lr:1.3e}")
                 mps.lr = new_lr
@@ -261,14 +274,15 @@ def train(
                 good_lr = True
                 loop_num += 1
                 test_loss = mps.get_test_loss(TEST_SET)
-                print_status(loop_num, mps, test_loss)
-                last_loop, last_path = find_latest_MPS(exp_folder)
-                mps.saveMPS(SAVEFILE_TEMPLATE.format(exp_folder, loop_num))
+                print_status(loop_num, mps, test_loss, epoch_time)
+                if SAVE_MODEL:
+                    last_loop, last_path = find_latest_MPS(exp_folder)
+                    mps.saveMPS(SAVEFILE_TEMPLATE.format(exp_folder, loop_num))
                 # if any(bd > 40 for bd in mps.bond_dims):
                 #     mps.verbose = 2
 
                 # If we're not keeping intermediate states, remove the last one
-                if not SAVE_INTERMEDIATE:
+                if SAVE_MODEL and not SAVE_INTERMEDIATE:
                     this_loop, _ = find_latest_MPS(exp_folder)
                     if last_loop > -1:
                         assert this_loop == last_loop + 1
@@ -302,12 +316,14 @@ if __name__ == "__main__":
     assert len(argv) > 1
 
     ### Hyperparameters for the experiment ###
-    for MAX_BDIM in [50, 70, 100, 150, 200, 300, 400, 500]:
+    # for MAX_BDIM in [50, 70, 100, 150, 200, 300, 400, 500, 750, 1000]:
+    for MAX_BDIM in [10]:
         # MPS hyperparameters
         MIN_BDIM = 1
         # MAX_BDIM = 10
         INIT_BDIM = 2
         SV_CUTOFF = 1e-7
+        EMBEDDING_FUN = None
         STEPS_PER_EPOCH = 2 * (28 ** 2) - 4
 
         # Training hyperparameters
@@ -317,11 +333,12 @@ if __name__ == "__main__":
         VERBOSITY = 1
         LR_SHRINK = 0.95
         MIN_LR = 1e-10
-        COMET_LOG = True
         # COMET_LOG = True
+        COMET_LOG = False
         # PROJECT_NAME = "hanetal-source-v2"
         PROJECT_NAME = "hanetal-source-v2"
         EXP_NAME = f"bd{MAX_BDIM}_bdi{INIT_BDIM}_cut{SV_CUTOFF:1.0e}"
+        SAVE_MODEL = False
         SAVE_INTERMEDIATE = False
         ORIGINAL_DATASET = True
         SEED = 0
