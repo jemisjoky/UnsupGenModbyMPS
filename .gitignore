@@ -4,4 +4,8 @@ MNIST/rand1k_runs/*
 # Comet data logging API key
 .comet.config
 
+# Full MNIST dataset
+MNIST/mnist-rand1k_28_thr50_z/full_test.npy
+MNIST/mnist-rand1k_28_thr50_z/full_train.npy
+
 __pycache__/

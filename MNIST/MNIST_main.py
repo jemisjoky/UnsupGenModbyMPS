@@ -255,7 +255,6 @@ def train(
                 mps = loadMPS(
                     find_latest_MPS(exp_folder)[1], dataset_path=TRAIN_SET_NAME
                 )
-                mps.lr = lr
 
             # Otherwise save the model and keep going
             else:
@@ -303,7 +302,7 @@ if __name__ == "__main__":
     assert len(argv) > 1
 
     ### Hyperparameters for the experiment ###
-    for MAX_BDIM in [10, 20, 30, 40, 70, 100, 150, 200, 300, 400, 500]:
+    for MAX_BDIM in [50, 70, 100, 150, 200, 300, 400, 500]:
         # MPS hyperparameters
         MIN_BDIM = 1
         # MAX_BDIM = 10
@@ -314,12 +313,13 @@ if __name__ == "__main__":
         # Training hyperparameters
         LR = 1e-3
         NBATCH = 10
-        EPOCHS = 50
+        EPOCHS = 20
         VERBOSITY = 1
         LR_SHRINK = 0.95
         MIN_LR = 1e-10
-        # COMET_LOG = False
         COMET_LOG = True
+        # COMET_LOG = True
+        # PROJECT_NAME = "hanetal-source-v2"
         PROJECT_NAME = "hanetal-source-v2"
         EXP_NAME = f"bd{MAX_BDIM}_bdi{INIT_BDIM}_cut{SV_CUTOFF:1.0e}"
         SAVE_INTERMEDIATE = False
@@ -357,6 +357,7 @@ if __name__ == "__main__":
         RUN_DIR = MNIST_DIR + "rand1k_runs/"  # Location of experiment logs
         EXP_PREFIX = "mnist1k_"  # Prefix for individual experiment directories
         TRAIN_SET_NAME = MNIST_DIR + "mnist-rand1k_28_thr50_z/paper_data.npy"
+        # TRAIN_SET_NAME = MNIST_DIR + "mnist-rand1k_28_thr50_z/full_train.npy"
         TEST_SET_NAME = MNIST_DIR + "mnist-rand1k_28_thr50_z/first1k_test.npy"
         SAVEFILE_TEMPLATE = "{}mps_loop_{:03d}.model.gz"
         SAVEFILE_REGEX = r"mps_loop_(\d+)\.model\.gz"
