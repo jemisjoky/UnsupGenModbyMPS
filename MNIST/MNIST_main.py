@@ -13,6 +13,7 @@ from matplotlib.ticker import MultipleLocator
 from comet_ml import Experiment
 
 from MPScumulant import MPS_c, loadMPS
+from utils import onehot
 
 # from MPScumulant_torch import MPS_c, loadMPS
 
@@ -229,7 +230,8 @@ def train(
             init_bd=INIT_BDIM,
             seed=SEED,
         )
-        mps.designate_data(TRAIN_SET)
+        # mps.designate_data(TRAIN_SET)
+        mps.designate_data(onehot(TRAIN_SET, 2).astype("float32"))
         mps.get_train_loss()
         test_loss = mps.get_test_loss(TEST_SET)
         init_time = time() - start_time

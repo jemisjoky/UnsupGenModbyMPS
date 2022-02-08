@@ -13,6 +13,8 @@ from numpy import einsum
 from numpy.random import rand
 from numpy.linalg import norm, svd
 
+from utils import is_int_type, is_float_type
+
 
 class MPS_c:
     def __init__(
@@ -216,7 +218,13 @@ class MPS_c:
 
     def designate_data(self, dataset):
         """Before the training starts, the training set is designated"""
-        self.data = dataset.astype(np.int8)
+        if is_int_type(dataset):
+            self.data = dataset.astype(np.int8)
+            self.continuous_input = False
+        else:
+            assert is_float_type(dataset)
+            self.data = dataset.astype(np.float32)
+            self.continuous_input = True
         self.batchsize = self.data.shape[0] // self.nbatch
         self.init_cumulants()
 
@@ -234,20 +242,23 @@ class MPS_c:
         if self.current_bond == self.mps_len - 1:
             # In this case, the MPS is left-canonicalized except the right most one, so the bond to be merged is mps_len-2
             self.current_bond -= 1
+
         self.cumulants = [np.ones((self.data.shape[0], 1))]
         for n in range(0, self.current_bond):
             self.cumulants.append(
                 einsum(
-                    "ij,jik->ik",
+                    "Bj,jBk->Bk",
                     self.cumulants[-1],
-                    self.matrices[n][:, self.data[:, n], :],
+                    slice_core(self.matrices[n], self.data[:, n]),
                 )
             )
         right_part = [np.ones((1, self.data.shape[0]))]
         for n in range(self.mps_len - 1, self.current_bond + 1, -1):
             right_part = [
                 einsum(
-                    "jil,li->ji", self.matrices[n][:, self.data[:, n]], right_part[0]
+                    "jBl,lB->jB",
+                    slice_core(self.matrices[n], self.data[:, n]),
+                    right_part[0],
                 )
             ] + right_part
         self.cumulants = self.cumulants + right_part
@@ -259,17 +270,19 @@ class MPS_c:
         k = self.current_bond
         if self.merged_matrix is None:
             return einsum(
-                "ij,jik,kil,li->i",
+                "Bj,jBk,kBl,lB->B",
                 self.cumulants[k],
-                self.matrices[k][:, self.data[:, k], :],
-                self.matrices[k + 1][:, self.data[:, k + 1], :],
+                slice_core(self.matrices[k], self.data[:, k]),
+                slice_core(self.matrices[k + 1], self.data[:, k + 1]),
                 self.cumulants[k + 1],
             )
         else:
             return einsum(
-                "ij,jik,ki->i",
+                "Bj,jBk,kB->B",
                 self.cumulants[k],
-                self.merged_matrix[:, self.data[:, k], self.data[:, k + 1], :],
+                slice_merged_core(
+                    self.merged_matrix, self.data[:, k], self.data[:, k + 1]
+                ),
                 self.cumulants[k + 1],
             )
 
@@ -306,24 +319,16 @@ class MPS_c:
         right_vecs = self.cumulants[kp1][:, indx]  # shape = (D, batchsize)
 
         # Batch of rank-1 matrices containing left and right environments
-        phi_mat = einsum("ij,ki->ijk", left_vecs, right_vecs)
+        phi_mat = einsum("Bj,kB->Bjk", left_vecs, right_vecs)
 
         # Probability amplitudes associated with all inputs in the batch
         psi = einsum(
-            "ij,jik,ki->i",
+            "Bj,jBk,kB->B",
             left_vecs,
-            self.merged_matrix[:, states[:, k], states[:, kp1], :],
+            slice_merged_core(self.merged_matrix, states[:, k], states[:, kp1]),
             right_vecs,
         )
 
-        gradient = np.zeros(
-            (
-                self.bond_dims[km1],
-                self.in_dim,
-                self.in_dim,
-                self.bond_dims[kp1],
-            )
-        )
         psi_inv = 1 / psi
         if np.any(psi == 0):
             print(
@@ -343,12 +348,35 @@ class MPS_c:
         # together. A factor of the merged matrix is subtracted from
         # this before gradient before it is applied to the merged matrix, and
         # the result is finally normalized so the merged matrix has unit norm.
-        for i, j in [(i, j) for i in range(self.in_dim) for j in range(self.in_dim)]:
-            idx = (states[:, k] == i) * (states[:, kp1] == j)
-            gradient[:, i, j, :] = (
-                np.einsum("ijk,i->jk", phi_mat[idx, :, :], psi_inv[idx]) * 2
+        if self.continuous_input:
+            gradient = (
+                np.einsum(
+                    "Bjk,Ba,Bb,B->jabk",
+                    phi_mat,
+                    states[:, k, :],
+                    states[:, kp1, :],
+                    psi_inv,
+                )
+                * 2
             )
+        else:
+            gradient = np.zeros(
+                (
+                    self.bond_dims[km1],
+                    self.in_dim,
+                    self.in_dim,
+                    self.bond_dims[kp1],
+                )
+            )
+            for i, j in [
+                (i, j) for i in range(self.in_dim) for j in range(self.in_dim)
+            ]:
+                idx = (states[:, k] == i) * (states[:, kp1] == j)
+                gradient[:, i, j, :] = (
+                    np.einsum("Bjk,B->jk", phi_mat[idx, :, :], psi_inv[idx]) * 2
+                )
         gradient /= self.batchsize
+        # TODO: Include embedding matrix in the case of embedded data
         gradient -= 2 * self.merged_matrix
 
         self.merged_matrix += gradient * self.lr
@@ -362,14 +390,14 @@ class MPS_c:
         k = self.current_bond
         if gone_right_just_now:
             self.cumulants[k] = einsum(
-                "ij,jik->ik",
+                "Bj,jBk->Bk",
                 self.cumulants[k - 1],
-                self.matrices[k - 1][:, self.data[:, k - 1], :],
+                slice_core(self.matrices[k - 1], self.data[:, k - 1]),
             )
         else:
             self.cumulants[k + 1] = einsum(
-                "jik,ki->ji",
-                self.matrices[k + 2][:, self.data[:, k + 2], :],
+                "jBk,kB->jB",
+                slice_core(self.matrices[k + 2], self.data[:, k + 2]),
                 self.cumulants[k + 2],
             )
 
@@ -524,30 +552,34 @@ class MPS_c:
             right_vecs = np.ones((1, nsam))
             for i in range(0, k):
                 left_vecs = einsum(
-                    "ij,jik->ik", left_vecs, self.matrices[i][:, states[:, i], :]
+                    "Bj,jBk->Bk", left_vecs, slice_core(self.matrices[i], states[:, i])
                 )
             for i in range(self.mps_len - 1, k + 1, -1):
                 right_vecs = einsum(
-                    "jik,ki->ji", self.matrices[i][:, states[:, i], :], right_vecs
+                    "jBk,kB->jB", slice_core(self.matrices[i], states[:, i]), right_vecs
                 )
             return einsum(
-                "ik,kil,li->i",
+                "Bk,kBl,lB->B",
                 left_vecs,
-                self.merged_matrix[:, states[:, k], states[:, kp1], :],
+                slice_merged_core(self.merged_matrix, states[:, k], states[:, kp1]),
                 right_vecs,
             )
         else:
             # TT -- default status
             # try:
-            left_vecs = self.matrices[0][0, states[:, 0], :]
+            left_vecs = slice_core(self.matrices[0], states[:, 0])[0, :, :]
             # except IndexError:
             #     print(self.matrices[0].shape, states)
             #     sys.exit(-10)
             for n in range(1, self.mps_len - 1):
                 left_vecs = einsum(
-                    "ij,jil->il", left_vecs, self.matrices[n][:, states[:, n], :]
+                    "Bj,jBl->Bl", left_vecs, slice_core(self.matrices[n], states[:, n])
                 )
-            return einsum("ij,ji->i", left_vecs, self.matrices[-1][:, states[:, -1], 0])
+            return einsum(
+                "Bj,jB->B",
+                left_vecs,
+                slice_core(self.matrices[-1], states[:, -1])[:, :, 0],
+            )
 
     def Give_probab(self, states):
         """Calculate the corresponding probability for configuration `states'"""
@@ -567,6 +599,10 @@ class MPS_c:
             2) Conditioned sampling: m.generate_sample((l, r), array([s_l,s_{l+1},...,s_{r-1}]))
                 array([s_l,s_{l+1},...,s_{r-1}]) is given, and (l,r) designates the location of this segment
         """
+        # Sampler currently only works for discrete data
+        if self.continuous_input:
+            raise NotImplementedError()
+
         state = np.empty((self.mps_len,), dtype=np.int8)
         if given_seg is None:
             if self.current_bond != self.mps_len - 1:
@@ -597,9 +633,9 @@ class MPS_c:
                 for bond in range(self.current_bond, l):
                     self.merge_bond()
                     self.rebuild_bond(going_right=True, keep_bdims=True)
-            vec = self.matrices[l][:, state[l], :]
+            vec = slice_core(self.matrices[l], state[l])
             for p in range(l + 1, r):
-                vec = np.dot(vec, self.matrices[p][:, state[p], :])
+                vec = np.dot(vec, slice_core(self.matrices[p], state[p]))
                 vec /= norm(vec)
             for p in range(r, self.mps_len):
                 vec_act = np.dot(vec, self.matrices[p][:, 1])
@@ -639,6 +675,10 @@ class MPS_c:
                 to specify the configuration of the given bits, the other bits will be ignored.
 
         """
+        # Sampler currently only works for discrete data
+        if self.continuous_input:
+            raise NotImplementedError()
+
         # <<<case: Start from scratch
         if stat is None or givn_msk is None or givn_msk.any() == False:
             if self.current_bond != self.mps_len - 1:
@@ -697,9 +737,9 @@ class MPS_c:
 
         # <<< If there's no intermediate bit that need to be sampled
         if plft2 == p_uncan:
-            vec = self.matrices[plft][:, state[plft], :]
+            vec = slice_core(self.matrices[plft], state[plft])
             for p in range(plft + 1, plft2 + 1):
-                vec = np.dot(vec, self.matrices[p][:, state[p], :])
+                vec = np.dot(vec, slice_core(self.matrices[p], state[p]))
                 vec /= norm(vec)
             for p in range(plft2 + 1, self.mps_len):
                 vec_act = np.dot(vec, self.matrices[p][:, 1])
@@ -867,3 +907,26 @@ def loadMPS(save_file, dataset_path=None):
         mps.designate_data(dataset)
 
     return mps
+
+
+### HELPER FUNCTIONS FOR DEALING WITH NON-DISCRETE INPUT DATA ###
+
+
+def slice_core(core_tensor, inputs):
+    """
+    Get matrix slices by indexing or contracting inputs, depending on input dtype
+    """
+    if is_int_type(inputs):
+        return core_tensor[:, inputs, :]
+    else:
+        return np.einsum("jak,Ba->jBk", core_tensor, inputs)
+
+
+def slice_merged_core(merged_core, left_inputs, right_inputs):
+    """
+    Get matrix slices by indexing or contracting inputs, depending on input dtype
+    """
+    if is_int_type(left_inputs):
+        return merged_core[:, left_inputs, right_inputs, :]
+    else:
+        return np.einsum("jabk,Ba,Bb->jBk", merged_core, left_inputs, right_inputs)
