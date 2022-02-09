@@ -322,15 +322,10 @@ class MPS_c:
 
     def get_train_loss(self, append=True):
         """Get the NLL averaged on the training set"""
-        L = -np.log(np.abs(self.Give_psi_cumulant()) ** 2).mean()  # - self.data_shannon
+        L = -2 * np.log(np.abs(self.Give_psi_cumulant())).mean()  # - self.data_shannon
         if append:
             self.losses.append([self.current_bond, L])
         return L
-
-    # def calc_loss(self, dat):
-    #     """Show the NLL averaged on an arbitrary set"""
-    #     L = -np.log(np.abs(self.Give_psi(dat)) ** 2).mean()
-    #     return L
 
     def gradient_descent_cumulants(self, batch_id):
         """ Gradient descent using cumulants, which efficiently avoids lots of tensor contraction!\\
@@ -577,7 +572,7 @@ class MPS_c:
         for attr, value in stash_dict.items():
             setattr(self, attr, value)
 
-    def Give_psi(self, states):
+    def get_prob_amps(self, states):
         """Calculate the corresponding psi for configuration `states'"""
         if states.ndim == 1:
             states = states.reshape((1, -1))
@@ -619,15 +614,13 @@ class MPS_c:
                 slice_core(self.matrices[-1], states[:, -1])[:, :, 0],
             )
 
-    def Give_probab(self, states):
-        """Calculate the corresponding probability for configuration `states'"""
-        return np.abs(self.Give_psi(states)) ** 2
-
     def get_test_loss(self, test_set):
         """
         Get the NLL averaged on the test set
         """
-        return -np.log(self.Give_probab(test_set)).mean()
+        if self.embedded_input:
+            test_set = self.embed_fun(test_set)
+        return -2 * np.log(np.abs(self.get_prob_amps(test_set))).mean()
 
     def generate_sample(self, given_seg=None, *arg):
         """

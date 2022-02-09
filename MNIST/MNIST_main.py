@@ -232,7 +232,8 @@ def train(
         mps.designate_data(TRAIN_SET.astype(np.float64))
         # mps.designate_data(TRAIN_SET)
         mps.get_train_loss()
-        test_loss = mps.get_test_loss(TEST_SET)
+        # test_loss = mps.get_test_loss(TEST_SET)
+        test_loss = mps.get_test_loss(TEST_SET.astype(np.float64))
         init_time = time() - start_time
         loop_num = 0
         step_count = 1  # Calcuation of initial training loss counts as step
