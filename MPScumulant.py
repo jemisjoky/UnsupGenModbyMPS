@@ -925,6 +925,33 @@ class MPS_c:
                 if update_cumulant:
                     self.update_cumulants(direction == 1)
 
+    def export_params(self):
+        """
+        Collate core tensors in single tensor and return with dummy edge vectors
+
+        This is to make it easier to feed the MPS parameters into a sampler I
+        had written previously, which expects this format. This also moves
+        the order of indices in the core tensors, from (left_bd, input, right_bd)
+        to (input, left_bd, right_bd)
+        """
+        max_bd = max(self.bond_dims)
+
+        # Build up core tensor from individual cores with padded bond dims
+        core_list = []
+        for core in self.matrices:
+            assert len(core.shape) == 3
+            left_bd, right_bd = core.shape[0], core.shape[2]
+            pad_core = np.zeros((self.in_dim, max_bd, max_bd))
+            pad_core[:, :left_bd, :right_bd] = core.transpose(1, 0, 2)
+            core_list.append(pad_core)
+        core_tensors = np.stack(core_list, axis=0)
+
+        # Edge vectors just pick out the first basis vector
+        edge_vecs = np.zeros((2, max_bd))
+        edge_vecs[:, 0] = 1
+
+        return core_tensors, edge_vecs
+
 
 def loadMPS(save_file, dataset_path=None):
     """
