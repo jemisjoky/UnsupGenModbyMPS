@@ -13,9 +13,7 @@ from matplotlib.ticker import MultipleLocator
 from comet_ml import Experiment
 
 from MPScumulant import MPS_c, loadMPS
-from utils import onehot
-
-# from MPScumulant_torch import MPS_c, loadMPS
+from embeddings import trig_embed
 
 # path.append("../")
 # mpl.use("Agg")
@@ -229,9 +227,10 @@ def train(
             min_bd=MIN_BDIM,
             init_bd=INIT_BDIM,
             seed=SEED,
+            embed_fun=EMBEDDING_FUN,
         )
+        mps.designate_data(TRAIN_SET.astype(np.float64))
         # mps.designate_data(TRAIN_SET)
-        mps.designate_data(onehot(TRAIN_SET, 2).astype("float32"))
         mps.get_train_loss()
         test_loss = mps.get_test_loss(TEST_SET)
         init_time = time() - start_time
@@ -325,7 +324,8 @@ if __name__ == "__main__":
         # MAX_BDIM = 10
         INIT_BDIM = 2
         SV_CUTOFF = 1e-7
-        EMBEDDING_FUN = None
+        EMBEDDING_FUN = trig_embed
+        # EMBEDDING_FUN = None
         STEPS_PER_EPOCH = 2 * (28 ** 2) - 4
 
         # Training hyperparameters

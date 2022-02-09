@@ -6,6 +6,7 @@ class MPS cumulant
 import os
 import sys
 import pickle
+from itertools import product
 
 import gzip
 import numpy as np
@@ -14,6 +15,7 @@ from numpy.random import rand
 from numpy.linalg import norm, svd
 
 from utils import is_int_type, is_float_type
+from embeddings import make_emb_mats
 
 
 class MPS_c:
@@ -29,6 +31,7 @@ class MPS_c:
         min_bd=1,
         init_bd=2,
         seed=1,
+        embed_fun=None,
     ):
         """
         MPS class, with cumulant technique, efficient in DMRG-2
@@ -44,6 +47,8 @@ class MPS_c:
             min_bd: minimum allowed bond dimension
             init_bd: dimension of bonds at initialization
             seed: random seed used to set model parameters
+            embed_fun: optional function embedding continuous-valued data into
+                vectors of dimension ``in_dim``
 
             bond_dims: list of bond dimensions, with bond_dims[i] connects i & i+1
             matrices: list of the tensors A^{(k)}
@@ -57,6 +62,10 @@ class MPS_c:
                     else: current_bond is the merged bond
                 mps_len-1: left-canonicalized
             cumulant: see init_cumulants.__doc__
+            E0, E1, E2: positive semidefinite matrices used to handle non-frame
+                embedding functions. E2 gives the integral of all rank-1
+                embedding matrices over all values in the interval [0, 1], and
+                E1, E0 respectively give the (PSD) sqrt, inverse sqrt of E2.
 
             losses: recorder of (current_bond, loss) tuples
             trainhistory: recorder of training history
@@ -91,6 +100,13 @@ class MPS_c:
         self.merged_matrix = None
         self.losses = []
         self.trainhistory = []
+
+        # Compute three embedding matrices used in MPS operation
+        self.embed_fun = embed_fun
+        if embed_fun is not None:
+            assert hasattr(embed_fun, "__call__")
+            embed_mats = make_emb_mats(embed_fun)
+            self.E0, self.E1, self.E2 = embed_mats
 
         # Initialize matrices to be in left canonical form
         self.left_cano()
@@ -128,6 +144,12 @@ class MPS_c:
         assert self.merged_matrix is not None
         k = self.current_bond
         kp1 = (k + 1) % self.mps_len
+
+        # For embedded inputs, canonical form requires that we include a copy
+        # of E1 on each site of merged core before the SVD
+        if self.embedded_input:
+            self.merged_matrix = einsum("jabk,ac,bd->jcdk", self.merged_matrix, self.E1, self.E1)
+
         U, s, V = svd(
             self.merged_matrix.reshape(
                 (
@@ -204,6 +226,12 @@ class MPS_c:
         )
         self.matrices[kp1] = V.reshape((new_bd, self.in_dim, self.bond_dims[kp1]))
 
+        # For embedded inputs, we now need to remove the two copies
+        # of E1 from earlier, using its pseudoinverse E0
+        if self.embedded_input:
+            self.matrices[k] = einsum("jak,ab->jbk", self.matrices[k], self.E0)
+            self.matrices[kp1] = einsum("jak,ab->jbk", self.matrices[kp1], self.E0)
+
         self.current_bond += 1 if going_right else -1
         self.merged_matrix = None
 
@@ -219,14 +247,20 @@ class MPS_c:
     def designate_data(self, dataset):
         """Before the training starts, the training set is designated"""
         if is_int_type(dataset):
+            # Dataset of discrete inputs, involves indexing cores
+            assert not self.embedded_input
             self.data = dataset.astype(np.int8)
-            self.continuous_input = False
         else:
+            # Continuous data is handled by user-specified embedding function
+            assert self.embedded_input
             assert is_float_type(dataset)
-            self.data = dataset.astype(np.float32)
-            self.continuous_input = True
+            self.data = self.embed_fun(dataset.astype(np.float32))
         self.batchsize = self.data.shape[0] // self.nbatch
         self.init_cumulants()
+
+    @property
+    def embedded_input(self):
+        return self.embed_fun is not None
 
     def init_cumulants(self):
         """
@@ -339,6 +373,24 @@ class MPS_c:
             print("Maybe you should decrease n_batch")
             raise ZeroDivisionError("Some of the psis=0")
 
+        if self.embedded_input:
+            gradient = 2 * (
+                np.einsum(
+                    "Bjk,Ba,Bb,B->jabk",
+                    phi_mat,
+                    states[:, k, :],
+                    states[:, kp1, :],
+                    psi_inv,
+                )
+            )
+            gradient /= self.batchsize
+
+            # Have to include a copy of E2 on each input for correctness of
+            # normalization gradient when we have non-frame embedding
+            gradient -= 2 * einsum(
+                "jabk,ac,bd->jcdk", self.merged_matrix, self.E2, self.E2
+            )
+
         # The gradient constructed below is equal to the sum of `batchsize`
         # individual contributions, each of which is an outer product of the
         # left and right environments for each datum, along with the (one-hot
@@ -348,17 +400,6 @@ class MPS_c:
         # together. A factor of the merged matrix is subtracted from
         # this before gradient before it is applied to the merged matrix, and
         # the result is finally normalized so the merged matrix has unit norm.
-        if self.continuous_input:
-            gradient = (
-                np.einsum(
-                    "Bjk,Ba,Bb,B->jabk",
-                    phi_mat,
-                    states[:, k, :],
-                    states[:, kp1, :],
-                    psi_inv,
-                )
-                * 2
-            )
         else:
             gradient = np.zeros(
                 (
@@ -368,16 +409,13 @@ class MPS_c:
                     self.bond_dims[kp1],
                 )
             )
-            for i, j in [
-                (i, j) for i in range(self.in_dim) for j in range(self.in_dim)
-            ]:
+            for i, j in product(range(self.in_dim), range(self.in_dim)):
                 idx = (states[:, k] == i) * (states[:, kp1] == j)
-                gradient[:, i, j, :] = (
-                    np.einsum("Bjk,B->jk", phi_mat[idx, :, :], psi_inv[idx]) * 2
+                gradient[:, i, j, :] = 2 * (
+                    np.einsum("Bjk,B->jk", phi_mat[idx, :, :], psi_inv[idx])
                 )
-        gradient /= self.batchsize
-        # TODO: Include embedding matrix in the case of embedded data
-        gradient -= 2 * self.merged_matrix
+            gradient /= self.batchsize
+            gradient -= 2 * self.merged_matrix
 
         self.merged_matrix += gradient * self.lr
         self.merged_matrix /= norm(self.merged_matrix)
@@ -600,7 +638,7 @@ class MPS_c:
                 array([s_l,s_{l+1},...,s_{r-1}]) is given, and (l,r) designates the location of this segment
         """
         # Sampler currently only works for discrete data
-        if self.continuous_input:
+        if self.embedded_input:
             raise NotImplementedError()
 
         state = np.empty((self.mps_len,), dtype=np.int8)
@@ -676,7 +714,7 @@ class MPS_c:
 
         """
         # Sampler currently only works for discrete data
-        if self.continuous_input:
+        if self.embedded_input:
             raise NotImplementedError()
 
         # <<<case: Start from scratch
