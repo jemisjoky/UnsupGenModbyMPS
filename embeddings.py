@@ -231,7 +231,10 @@ def trig_embed(data, emb_dim=2):
 
     emb_data = []
     for s in range(emb_dim):
-        comp = np.cos(data * np.pi / 2) ** (emb_dim - s - 1) * np.sin(data * np.pi / 2) ** s
+        comp = (
+            np.cos(data * np.pi / 2) ** (emb_dim - s - 1)
+            * np.sin(data * np.pi / 2) ** s
+        )
         comp *= np.sqrt(binom(emb_dim - 1, s))
         emb_data.append(comp)
     emb_data = np.stack(emb_data, axis=-1)

@@ -7,5 +7,7 @@ MNIST/rand1k_runs/*
 # Full MNIST dataset
 MNIST/mnist-rand1k_28_thr50_z/full_test.npy
 MNIST/mnist-rand1k_28_thr50_z/full_train.npy
+MNIST/mnist-rand1k_28_thr50_z/full_test_discrete.npy
+MNIST/mnist-rand1k_28_thr50_z/full_train_discrete.npy
 
 __pycache__/

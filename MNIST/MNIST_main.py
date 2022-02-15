@@ -2,9 +2,10 @@
 import os
 import re
 import json
-from time import time
-from math import sqrt
 from sys import argv
+from time import time
+from math import sqrt, log
+from functools import partial
 
 import numpy as np
 import matplotlib as mpl
@@ -122,7 +123,7 @@ def find_latest_MPS(exp_folder):
     return find_last_file(exp_folder, SAVEFILE_REGEX)
 
 
-def print_status(loop_num, mps, test_loss, epoch_time):
+def print_status(loop_num, mps, test_loss, epoch_time, offset):
     """
     Print the latest loss and bond dimensions attained by the MPS model
     """
@@ -134,12 +135,12 @@ def print_status(loop_num, mps, test_loss, epoch_time):
 
     # Very first loss evaluation has different format
     if loop_num == 0:
-        to_print["Initial train loss:"] = mps.losses[-1][1]
+        to_print["Initial train loss:"] = mps.losses[-1][1] + offset
     else:
-        to_print[f"Loop {loop_num} train loss:"] = mps.losses[-1][1]
+        to_print[f"Loop {loop_num} train loss:"] = mps.losses[-1][1] + offset
 
     # Maximum and mean bond dimension
-    to_print["  Test loss:"] = test_loss
+    to_print["  Test loss:"] = test_loss + offset
     to_print["  Max bond dim:"] = max(mps.bond_dims)
     to_print["  Mean bond dim:"] = sum(mps.bond_dims) / len(mps.bond_dims)
     to_print["  Loop runtime:"] = epoch_time
@@ -219,6 +220,7 @@ def train(
         start_time = time()
         mps = MPS_c(
             28 ** 2,
+            in_dim=IN_DIM,
             cutoff=SV_CUTOFF,
             lr=LR,
             nbatch=NBATCH,
@@ -233,15 +235,19 @@ def train(
         # mps.designate_data(TRAIN_SET)
         mps.get_train_loss()
         # test_loss = mps.get_test_loss(TEST_SET)
+        train_loss = mps.get_test_loss(TEST_SET.astype(np.float64))
         test_loss = mps.get_test_loss(TEST_SET.astype(np.float64))
         init_time = time() - start_time
         loop_num = 0
         step_count = 1  # Calcuation of initial training loss counts as step
 
-        print_status(loop_num, mps, test_loss, init_time)
+        # Add loss offset in case of embedded data
+        offset = log(2) * (28 ** 2) if EMBEDDING_FUN is not None else 0.
+
+        print_status(loop_num, mps, test_loss, init_time, offset)
         if LOGGER is not None:
             LOGGER.log_metrics(
-                {"train_loss": mps.losses[-1][-1], "test_loss": test_loss}, epoch=0
+                {"train_loss": train_loss + offset, "test_loss": test_loss + offset}, epoch=0
             )
 
     while loop_num < epochs:
@@ -261,8 +267,7 @@ def train(
             if mps.losses[-1][-1] > loss_last and SAVE_MODEL:
                 new_lr = mps.lr * LR_SHRINK
                 print(f"lr={mps.lr:1.3e} is too large, decreasing to lr={new_lr:1.3e}")
-                mps.lr = new_lr
-                if mps.lr < MIN_LR:
+                if new_lr < MIN_LR:
                     print("lr is negligible, ending training")
                     return
 
@@ -270,18 +275,21 @@ def train(
                 mps = loadMPS(
                     find_latest_MPS(exp_folder)[1], dataset_path=TRAIN_SET_NAME
                 )
+                mps.lr = new_lr
 
             # Otherwise save the model and keep going
             else:
                 good_lr = True
                 loop_num += 1
                 test_loss = mps.get_test_loss(TEST_SET)
-                print_status(loop_num, mps, test_loss, epoch_time)
                 if SAVE_MODEL:
                     last_loop, last_path = find_latest_MPS(exp_folder)
                     mps.saveMPS(SAVEFILE_TEMPLATE.format(exp_folder, loop_num))
                 # if any(bd > 40 for bd in mps.bond_dims):
                 #     mps.verbose = 2
+
+                # Add loss offset in case of embedded data
+                print_status(loop_num, mps, test_loss, epoch_time, offset)
 
                 # If we're not keeping intermediate states, remove the last one
                 if SAVE_MODEL and not SAVE_INTERMEDIATE:
@@ -295,14 +303,14 @@ def train(
                     assert len(mps.losses[step_count:]) % STEPS_PER_EPOCH == 0
                     for step, (bond, loss) in enumerate(mps.losses[step_count:]):
                         LOGGER.log_metrics(
-                            {"current_bond": bond, "batch_loss": loss},
+                            {"current_bond": bond, "batch_loss": loss + offset},
                             step=(step_count + step),
                             epoch=loop_num,
                         )
                     LOGGER.log_metrics(
                         {
-                            "train_loss": mps.losses[-1][-1],
-                            "test_loss": test_loss,
+                            "train_loss": mps.losses[-1][-1] + offset,
+                            "test_loss": test_loss + offset,
                             "max_bd": max(mps.bond_dims),
                             "min_bd": min(mps.bond_dims),
                             "mean_bd": sum(mps.bond_dims) / len(mps.bond_dims),
@@ -318,14 +326,15 @@ if __name__ == "__main__":
     assert len(argv) > 1
 
     ### Hyperparameters for the experiment ###
-    # for MAX_BDIM in [50, 70, 100, 150, 200, 300, 400, 500, 750, 1000]:
-    for MAX_BDIM in [10]:
+    # for MAX_BDIM in [10, 20, 30, 40, 50, 70, 100, 150, 200, 300, 400, 500, 750, 1000]:
+    for MAX_BDIM in [10, 20, 30, 40, 50]:
         # MPS hyperparameters
+        IN_DIM = 2
         MIN_BDIM = 1
         # MAX_BDIM = 10
         INIT_BDIM = 2
         SV_CUTOFF = 1e-7
-        EMBEDDING_FUN = trig_embed
+        EMBEDDING_FUN = partial(trig_embed, emb_dim=IN_DIM)
         # EMBEDDING_FUN = None
         STEPS_PER_EPOCH = 2 * (28 ** 2) - 4
 
@@ -334,16 +343,14 @@ if __name__ == "__main__":
         NBATCH = 10
         EPOCHS = 20
         VERBOSITY = 1
-        LR_SHRINK = 0.95
-        MIN_LR = 1e-10
-        # COMET_LOG = True
-        COMET_LOG = False
-        # PROJECT_NAME = "hanetal-source-v2"
-        PROJECT_NAME = "hanetal-source-v2"
+        LR_SHRINK = 9e-2
+        MIN_LR = 1e-5
+        COMET_LOG = True
+        # COMET_LOG = False
+        PROJECT_NAME = "hanetal-continuous-v1"
         EXP_NAME = f"bd{MAX_BDIM}_bdi{INIT_BDIM}_cut{SV_CUTOFF:1.0e}"
-        SAVE_MODEL = False
+        SAVE_MODEL = True
         SAVE_INTERMEDIATE = False
-        ORIGINAL_DATASET = True
         SEED = 0
 
         # Save hyperparameters, setup Comet logger
@@ -354,6 +361,8 @@ if __name__ == "__main__":
                 "MNIST_DIR",
                 "RUN_DIR",
                 "EXP_PREFIX",
+                "BIN_TRAIN_SET_NAME",
+                "BIN_TEST_SET_NAME",
                 "TRAIN_SET_NAME",
                 "TEST_SET_NAME",
                 "SAVEFILE_TEMPLATE",
@@ -365,6 +374,9 @@ if __name__ == "__main__":
             for var in vars_to_delete:
                 del globals()[var]
         PARAM_DICT = {k.lower(): v for k, v in globals().items() if k.upper() == k}
+
+        # Embedding function can't be serialized, so only keep whether nontrivial embed
+        PARAM_DICT["embedding_fun"] = EMBEDDING_FUN is not None
         if COMET_LOG:
             LOGGER = Experiment(project_name=PROJECT_NAME)
             LOGGER.log_parameters(PARAM_DICT)
@@ -376,15 +388,26 @@ if __name__ == "__main__":
         MNIST_DIR = "./MNIST/"
         RUN_DIR = MNIST_DIR + "rand1k_runs/"  # Location of experiment logs
         EXP_PREFIX = "mnist1k_"  # Prefix for individual experiment directories
-        TRAIN_SET_NAME = MNIST_DIR + "mnist-rand1k_28_thr50_z/paper_data.npy"
-        # TRAIN_SET_NAME = MNIST_DIR + "mnist-rand1k_28_thr50_z/full_train.npy"
+        BIN_TRAIN_SET_NAME = MNIST_DIR + "mnist-rand1k_28_thr50_z/paper_data.npy"
+        # BIN_TRAIN_SET_NAME = MNIST_DIR + "mnist-rand1k_28_thr50_z/full_train.npy"
+        # BIN_TRAIN_SET_NAME = (
+        #     MNIST_DIR + "mnist-rand1k_28_thr50_z/first1k_train_discrete.npy"
+        # )
+        BIN_TEST_SET_NAME = (
+            MNIST_DIR + "mnist-rand1k_28_thr50_z/first1k_test_discrete.npy"
+        )
+        TRAIN_SET_NAME = MNIST_DIR + "mnist-rand1k_28_thr50_z/first1k_train.npy"
         TEST_SET_NAME = MNIST_DIR + "mnist-rand1k_28_thr50_z/first1k_test.npy"
         SAVEFILE_TEMPLATE = "{}mps_loop_{:03d}.model.gz"
         SAVEFILE_REGEX = r"mps_loop_(\d+)\.model\.gz"
 
         # Load 1000 random MNIST images
-        TRAIN_SET = np.load(TRAIN_SET_NAME)
-        TEST_SET = np.load(TEST_SET_NAME)
+        TRAIN_SET = np.load(
+            BIN_TRAIN_SET_NAME if EMBEDDING_FUN is None else TRAIN_SET_NAME
+        )
+        TEST_SET = np.load(
+            BIN_TEST_SET_NAME if EMBEDDING_FUN is None else TEST_SET_NAME
+        )
 
         if argv[1] == "init":
             mps = init()

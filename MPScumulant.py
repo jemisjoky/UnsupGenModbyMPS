@@ -148,7 +148,9 @@ class MPS_c:
         # For embedded inputs, canonical form requires that we include a copy
         # of E1 on each site of merged core before the SVD
         if self.embedded_input:
-            self.merged_matrix = einsum("jabk,ac,bd->jcdk", self.merged_matrix, self.E1, self.E1)
+            self.merged_matrix = einsum(
+                "jabk,ac,bd->jcdk", self.merged_matrix, self.E1, self.E1
+            )
 
         U, s, V = svd(
             self.merged_matrix.reshape(
