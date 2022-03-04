@@ -3,14 +3,16 @@
 class MPS cumulant
 @author: congzlwag
 """
-import os
-import sys
 import pickle
+from itertools import product
 
 import gzip
 import torch
 import numpy as np
 from torch.linalg import norm, svd
+
+from utils import is_int_type, is_float_type
+from embeddings import make_emb_mats
 
 
 class MPS_c:
@@ -26,6 +28,7 @@ class MPS_c:
         min_bd=1,
         init_bd=2,
         seed=1,
+        embed_fun=None,
     ):
         """
         MPS class, with cumulant technique, efficient in DMRG-2
@@ -41,6 +44,8 @@ class MPS_c:
             min_bd: minimum allowed bond dimension
             init_bd: dimension of bonds at initialization
             seed: random seed used to set model parameters
+            embed_fun: optional function embedding continuous-valued data into
+                vectors of dimension ``in_dim``
 
             bond_dims: list of bond dimensions, with bond_dims[i] connects i & i+1
             matrices: list of the tensors A^{(k)}
@@ -54,6 +59,10 @@ class MPS_c:
                     else: current_bond is the merged bond
                 mps_len-1: left-canonicalized
             cumulant: see init_cumulants.__doc__
+            E0, E1, E2: positive semidefinite matrices used to handle non-frame
+                embedding functions. E2 gives the integral of all rank-1
+                embedding matrices over all values in the interval [0, 1], and
+                E1, E0 respectively give the (PSD) sqrt, inverse sqrt of E2.
 
             losses: recorder of (current_bond, loss) tuples
             trainhistory: recorder of training history
@@ -88,6 +97,15 @@ class MPS_c:
         self.merged_matrix = None
         self.losses = []
         self.trainhistory = []
+
+        # Compute three embedding matrices used in MPS operation
+        if embed_fun is not None:
+            assert hasattr(embed_fun, "__call__")
+            embed_mats = make_emb_mats(embed_fun)
+            self.E0, self.E1, self.E2 = [torch.tensor(m) for m in embed_mats]
+            self.embed_fun = lambda inp: torch.tensor(embed_fun(inp))
+        else:
+            self.embed_fun = None
 
         # Initialize matrices to be in left canonical form
         self.left_cano()
@@ -127,6 +145,14 @@ class MPS_c:
         assert self.merged_matrix is not None
         k = self.current_bond
         kp1 = (k + 1) % self.mps_len
+
+        # For embedded inputs, canonical form requires that we include a copy
+        # of E1 on each site of merged core before the SVD
+        if self.embedded_input:
+            self.merged_matrix = torch.einsum(
+                "jabk,ac,bd->jcdk", self.merged_matrix, self.E1, self.E1
+            )
+
         U, s, V = svd(
             self.merged_matrix.reshape(
                 (
@@ -203,6 +229,14 @@ class MPS_c:
         )
         self.matrices[kp1] = V.reshape((new_bd, self.in_dim, self.bond_dims[kp1]))
 
+        # For embedded inputs, we now need to remove the two copies
+        # of E1 from earlier, using its pseudoinverse E0
+        if self.embedded_input:
+            self.matrices[k] = torch.einsum("jak,ab->jbk", self.matrices[k], self.E0)
+            self.matrices[kp1] = torch.einsum(
+                "jak,ab->jbk", self.matrices[kp1], self.E0
+            )
+
         self.current_bond += 1 if going_right else -1
         self.merged_matrix = None
 
@@ -218,9 +252,21 @@ class MPS_c:
     @torch.no_grad()
     def designate_data(self, dataset):
         """Before the training starts, the training set is designated"""
-        self.data = torch.tensor(dataset).long()
+        if is_int_type(dataset):
+            # Dataset of discrete inputs, involves indexing cores
+            assert not self.embedded_input
+            self.data = torch.tensor(dataset).long()
+        else:
+            # Continuous data is handled by user-specified embedding function
+            assert self.embedded_input
+            assert is_float_type(dataset)
+            self.data = self.embed_fun(dataset)
         self.batchsize = self.data.shape[0] // self.nbatch
         self.init_cumulants()
+
+    @property
+    def embedded_input(self):
+        return self.embed_fun is not None
 
     @torch.no_grad()
     def init_cumulants(self):
@@ -237,20 +283,23 @@ class MPS_c:
         if self.current_bond == self.mps_len - 1:
             # In this case, the MPS is left-canonicalized except the right most one, so the bond to be merged is mps_len-2
             self.current_bond -= 1
+
         self.cumulants = [torch.ones((self.data.shape[0], 1))]
         for n in range(0, self.current_bond):
             self.cumulants.append(
                 torch.einsum(
-                    "ij,jik->ik",
+                    "Bj,jBk->Bk",
                     self.cumulants[-1],
-                    self.matrices[n][:, self.data[:, n], :],
+                    slice_core(self.matrices[n], self.data[:, n]),
                 )
             )
         right_part = [torch.ones((1, self.data.shape[0]))]
         for n in range(self.mps_len - 1, self.current_bond + 1, -1):
             right_part = [
                 torch.einsum(
-                    "jil,li->ji", self.matrices[n][:, self.data[:, n]], right_part[0]
+                    "jBl,lB->jB",
+                    slice_core(self.matrices[n], self.data[:, n]),
+                    right_part[0],
                 )
             ] + right_part
         self.cumulants = self.cumulants + right_part
@@ -263,34 +312,29 @@ class MPS_c:
         k = self.current_bond
         if self.merged_matrix is None:
             return torch.einsum(
-                "ij,jik,kil,li->i",
+                "Bj,jBk,kBl,lB->B",
                 self.cumulants[k],
-                self.matrices[k][:, self.data[:, k], :],
-                self.matrices[k + 1][:, self.data[:, k + 1], :],
+                slice_core(self.matrices[k], self.data[:, k]),
+                slice_core(self.matrices[k + 1], self.data[:, k + 1]),
                 self.cumulants[k + 1],
             )
         else:
             return torch.einsum(
-                "ij,jik,ki->i",
+                "Bj,jBk,kB->B",
                 self.cumulants[k],
-                self.merged_matrix[:, self.data[:, k], self.data[:, k + 1], :],
+                slice_merged_core(
+                    self.merged_matrix, self.data[:, k], self.data[:, k + 1]
+                ),
                 self.cumulants[k + 1],
             )
 
     @torch.no_grad()
     def get_train_loss(self, append=True):
         """Get the NLL averaged on the training set"""
-        L = -torch.log(
-            torch.abs(self.Give_psi_cumulant()) ** 2
-        ).mean()  # - self.data_shannon
+        L = -2 * np.log(np.abs(self.Give_psi_cumulant())).mean()  # - self.data_shannon
         if append:
             self.losses.append([self.current_bond, L])
         return L
-
-    # def calc_loss(self, dat):
-    #     """Show the NLL averaged on an arbitrary set"""
-    #     L = -torch.log(torch.abs(self.Give_psi(dat)) ** 2).mean()
-    #     return L
 
     @torch.no_grad()
     def gradient_descent_cumulants(self, batch_id):
@@ -314,33 +358,43 @@ class MPS_c:
         right_vecs = self.cumulants[kp1][:, indx]  # shape = (D, batchsize)
 
         # Batch of rank-1 matrices containing left and right environments
-        phi_mat = torch.einsum("ij,ki->ijk", left_vecs, right_vecs)
+        phi_mat = torch.einsum("Bj,kB->Bjk", left_vecs, right_vecs)
 
         # Probability amplitudes associated with all inputs in the batch
         psi = torch.einsum(
-            "ij,jik,ki->i",
+            "Bj,jBk,kB->B",
             left_vecs,
-            self.merged_matrix[:, states[:, k], states[:, kp1], :],
+            slice_merged_core(self.merged_matrix, states[:, k], states[:, kp1]),
             right_vecs,
         )
 
-        gradient = torch.zeros(
-            (
-                self.bond_dims[km1],
-                self.in_dim,
-                self.in_dim,
-                self.bond_dims[kp1],
-            )
-        )
         psi_inv = 1 / psi
         if torch.any(psi == 0):
             print(
                 "Error: At bond %d, batchsize=%d, while %d of them psi=0."
                 % (self.current_bond, self.batchsize, (psi == 0).sum())
             )
-            print(torch.argmax(psi == 0).ravel())
+            # print(torch.argmax(psi == 0).ravel())
             print("Maybe you should decrease n_batch")
             raise ZeroDivisionError("Some of the psis=0")
+
+        if self.embedded_input:
+            gradient = 2 * (
+                torch.einsum(
+                    "Bjk,Ba,Bb,B->jabk",
+                    phi_mat,
+                    states[:, k, :],
+                    states[:, kp1, :],
+                    psi_inv,
+                )
+            )
+            gradient /= self.batchsize
+
+            # Have to include a copy of E2 on each input for correctness of
+            # normalization gradient when we have non-frame embedding
+            gradient -= 2 * torch.einsum(
+                "jabk,ac,bd->jcdk", self.merged_matrix, self.E2, self.E2
+            )
 
         # The gradient constructed below is equal to the sum of `batchsize`
         # individual contributions, each of which is an outer product of the
@@ -351,13 +405,20 @@ class MPS_c:
         # together. A factor of the merged matrix is subtracted from
         # this before gradient before it is applied to the merged matrix, and
         # the result is finally normalized so the merged matrix has unit norm.
-        for i, j in [(i, j) for i in range(self.in_dim) for j in range(self.in_dim)]:
-            idx = (states[:, k] == i) * (states[:, kp1] == j)
-            gradient[:, i, j, :] = (
-                torch.einsum("ijk,i->jk", phi_mat[idx, :, :], psi_inv[idx]) * 2
+        else:
+            gradient = torch.zeros(
+                (
+                    self.bond_dims[km1],
+                    self.in_dim,
+                    self.in_dim,
+                    self.bond_dims[kp1],
+                )
             )
-        gradient /= self.batchsize
-        gradient -= 2 * self.merged_matrix
+            for i, j in product(range(self.in_dim), range(self.in_dim)):
+                idx = (states[:, k] == i) * (states[:, kp1] == j)
+                gradient[:, i, j, :] = 2 * (
+                    torch.einsum("Bjk,B->jk", phi_mat[idx, :, :], psi_inv[idx])
+                )
 
         self.merged_matrix += gradient * self.lr
         self.merged_matrix /= norm(self.merged_matrix)
@@ -371,14 +432,14 @@ class MPS_c:
         k = self.current_bond
         if gone_right_just_now:
             self.cumulants[k] = torch.einsum(
-                "ij,jik->ik",
+                "Bj,jBk->Bk",
                 self.cumulants[k - 1],
-                self.matrices[k - 1][:, self.data[:, k - 1], :],
+                slice_core(self.matrices[k - 1], self.data[:, k - 1]),
             )
         else:
             self.cumulants[k + 1] = torch.einsum(
-                "jik,ki->ji",
-                self.matrices[k + 2][:, self.data[:, k + 2], :],
+                "jBk,kB->jB",
+                slice_core(self.matrices[k + 2], self.data[:, k + 2]),
                 self.cumulants[k + 2],
             )
 
@@ -523,7 +584,7 @@ class MPS_c:
             setattr(self, attr, value)
 
     @torch.no_grad()
-    def Give_psi(self, states):
+    def get_prob_amps(self, states):
         """Calculate the corresponding psi for configuration `states'"""
         if states.ndim == 1:
             states = states.reshape((1, -1))
@@ -536,44 +597,44 @@ class MPS_c:
             right_vecs = torch.ones((1, nsam))
             for i in range(0, k):
                 left_vecs = torch.einsum(
-                    "ij,jik->ik", left_vecs, self.matrices[i][:, states[:, i], :]
+                    "Bj,jBk->Bk", left_vecs, slice_core(self.matrices[i], states[:, i])
                 )
             for i in range(self.mps_len - 1, k + 1, -1):
                 right_vecs = torch.einsum(
-                    "jik,ki->ji", self.matrices[i][:, states[:, i], :], right_vecs
+                    "jBk,kB->jB", slice_core(self.matrices[i], states[:, i]), right_vecs
                 )
             return torch.einsum(
-                "ik,kil,li->i",
+                "Bk,kBl,lB->B",
                 left_vecs,
-                self.merged_matrix[:, states[:, k], states[:, kp1], :],
+                slice_merged_core(self.merged_matrix, states[:, k], states[:, kp1]),
                 right_vecs,
             )
         else:
             # TT -- default status
             # try:
-            left_vecs = self.matrices[0][0, states[:, 0], :]
+            left_vecs = slice_core(self.matrices[0], states[:, 0])[0, :, :]
             # except IndexError:
             #     print(self.matrices[0].shape, states)
             #     sys.exit(-10)
             for n in range(1, self.mps_len - 1):
                 left_vecs = torch.einsum(
-                    "ij,jil->il", left_vecs, self.matrices[n][:, states[:, n], :]
+                    "Bj,jBl->Bl", left_vecs, slice_core(self.matrices[n], states[:, n])
                 )
             return torch.einsum(
-                "ij,ji->i", left_vecs, self.matrices[-1][:, states[:, -1], 0]
+                "Bj,jB->B",
+                left_vecs,
+                slice_core(self.matrices[-1], states[:, -1])[:, :, 0],
             )
-
-    @torch.no_grad()
-    def Give_probab(self, states):
-        """Calculate the corresponding probability for configuration `states'"""
-        return torch.abs(self.Give_psi(states)) ** 2
 
     @torch.no_grad()
     def get_test_loss(self, test_set):
         """
         Get the NLL averaged on the test set
         """
-        return -torch.log(self.Give_probab(test_set)).mean()
+        test_set = torch.tensor(test_set)
+        if self.embedded_input:
+            test_set = self.embed_fun(test_set)
+        return -2 * self.get_prob_amps(test_set).abs().log().mean()
 
     @torch.no_grad()
     def generate_sample(self, given_seg=None, *arg):
@@ -876,6 +937,33 @@ class MPS_c:
                 if update_cumulant:
                     self.update_cumulants(direction == 1)
 
+    def export_params(self):
+        """
+        Collate core tensors in single tensor and return with dummy edge vectors
+
+        This is to make it easier to feed the MPS parameters into a sampler I
+        had written previously, which expects this format. This also moves
+        the order of indices in the core tensors, from (left_bd, input, right_bd)
+        to (input, left_bd, right_bd)
+        """
+        max_bd = max(self.bond_dims)
+
+        # Build up core tensor from individual cores with padded bond dims
+        core_list = []
+        for core in self.matrices:
+            assert len(core.shape) == 3
+            left_bd, right_bd = core.shape[0], core.shape[2]
+            pad_core = torch.zeros((self.in_dim, max_bd, max_bd))
+            pad_core[:, :left_bd, :right_bd] = core.transpose(1, 0, 2)
+            core_list.append(pad_core)
+        core_tensors = torch.stack(core_list, dim=0)
+
+        # Edge vectors just pick out the first basis vector
+        edge_vecs = torch.zeros((2, max_bd))
+        edge_vecs[:, 0] = 1
+
+        return core_tensors, edge_vecs
+
 
 def loadMPS(save_file, dataset_path=None):
     """
@@ -889,3 +977,30 @@ def loadMPS(save_file, dataset_path=None):
         mps.designate_data(dataset)
 
     return mps
+
+
+### HELPER FUNCTIONS FOR DEALING WITH NON-DISCRETE INPUT DATA ###
+
+
+def slice_core(core_tensor, inputs):
+    """
+    Get matrix slices by indexing or contracting inputs, depending on input dtype
+    """
+    assert isinstance(core_tensor, torch.Tensor)
+    assert isinstance(inputs, torch.Tensor)
+    if is_int_type(inputs):
+        return core_tensor[:, inputs, :]
+    else:
+        print(inputs.dtype)
+        return torch.einsum("jak,Ba->jBk", core_tensor, inputs)
+
+
+def slice_merged_core(merged_core, left_inputs, right_inputs):
+    """
+    Get matrix slices by indexing or contracting inputs, depending on input dtype
+    """
+    assert isinstance(merged_core, torch.Tensor)
+    if is_int_type(left_inputs):
+        return merged_core[:, left_inputs, right_inputs, :]
+    else:
+        return torch.einsum("jabk,Ba,Bb->jBk", merged_core, left_inputs, right_inputs)

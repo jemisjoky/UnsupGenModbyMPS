@@ -10,7 +10,7 @@ from MPScumulant import MPS_c
 
 
 @torch.no_grad()
-def sample(cores, edge_vecs, num_samples=1, embed_obj=None):
+def sample(cores, edge_vecs, num_samples=1, embed_fun=None):
     """
     Produce continuous or discrete samples from an MPS Born machine
 
@@ -36,35 +36,18 @@ def sample(cores, edge_vecs, num_samples=1, embed_obj=None):
     assert len(right_mats) == len(cores)
 
     # Precompute cumulative embedding mats for non-trivial embedding
-    if embed_obj is not None:
-        domain = embed_obj.domain
-        continuous = domain.continuous
-        embed_fun = embed_obj.__call__
+    if embed_fun is not None:
+        num_points = 1000
+        points = torch.linspace(0.0, 1.0, steps=num_points)
+        dx = 1 / (num_points - 1)
+        emb_vecs = torch.tensor(embed_fun(points))
+        assert emb_vecs.shape[1] == input_dim
 
-        if continuous:
-            num_points = embed_obj.num_points
-            points = torch.linspace(
-                domain.min_val, domain.max_val, steps=embed_obj.num_points
-            )
-            dx = (domain.max_val - domain.min_val) / (embed_obj.num_points - 1)
-            emb_vecs = embed_fun(points)
-            assert emb_vecs.shape[1] == input_dim
+        # Get rank-1 matrices for each point, then numerically integrate
+        emb_mats = torch.einsum("bi,bj->bij", emb_vecs, emb_vecs.conj())
+        int_mats = torch.cumsum(emb_mats, dim=0) * dx
 
-            # Get rank-1 matrices for each point, then numerically integrate
-            emb_mats = torch.einsum("bi,bj->bij", emb_vecs, emb_vecs.conj())
-            int_mats = torch.cumsum(emb_mats, dim=0) * dx
-
-        else:
-            num_points = domain.max_val
-            points = torch.arange(num_points).long()
-            emb_vecs = embed_fun(points)
-            assert emb_vecs.shape[1] == input_dim
-
-            # Get rank-1 matrices for each point, then sum together
-            emb_mats = torch.einsum("bi,bj->bij", emb_vecs, emb_vecs.conj())
-            int_mats = torch.cumsum(emb_mats, dim=0)
     else:
-        continuous = False
         num_points = input_dim
         int_mats = None
         points = None
@@ -76,11 +59,10 @@ def sample(cores, edge_vecs, num_samples=1, embed_obj=None):
         print(f"\rSample {step}", end="")
         step += 1
         samps, l_vecs = _sample_step(
-            # core, l_vecs, r_mat, embed_obj, int_mats, num_samples, points, generator
             core,
             l_vecs,
             r_mat,
-            embed_obj,
+            embed_fun,
             int_mats,
             num_samples,
             points,
@@ -90,7 +72,7 @@ def sample(cores, edge_vecs, num_samples=1, embed_obj=None):
     samples = torch.stack(samples, dim=1)
 
     # If needed, convert integer sample outcomes into continuous values
-    if continuous:
+    if embed_fun is not None:
         samples = points[samples]
     elif input_dim != 2:
         samples = samples.float() / (input_dim - 1)
@@ -100,11 +82,10 @@ def sample(cores, edge_vecs, num_samples=1, embed_obj=None):
 
 @torch.no_grad()
 def _sample_step(
-    # core, l_vecs, r_mat, embed_obj, int_mats, num_samples, points, generator
     core,
     l_vecs,
     r_mat,
-    embed_obj,
+    embed_fun,
     int_mats,
     num_samples,
     points,
@@ -113,7 +94,7 @@ def _sample_step(
     Function for generating single batch of samples
     """
     # Get unnormalized probabilities and normalize
-    if embed_obj is not None:
+    if embed_fun is not None:
         int_probs = torch.einsum(
             "bl,bm,ilr,uij,jms,rs->bu",
             l_vecs,
@@ -146,9 +127,9 @@ def _sample_step(
     samp_ints = torch.argmax((int_probs > rand_vals).long(), dim=1)
 
     # Conditionally update new left boundary vectors
-    if embed_obj is not None:
+    if embed_fun is not None:
         samp_points = points[samp_ints]
-        emb_vecs = embed_obj(samp_points)
+        emb_vecs = torch.tensor(embed_fun(samp_points))
         l_vecs = torch.einsum("bl,ilr,bi->br", l_vecs, core, emb_vecs)
     else:
         samp_mats = core[samp_ints]
@@ -199,13 +180,22 @@ def right_trace_mats(tensor_cores, right_vec):
 def print_pretrained_samples():
     # Extract core tensors and edge vectors from saved model, convert to torch
     num_samps = 5
+    # Discrete MPS models
     # save_file = "MNIST/rand1k_runs/mnist1k_27/mps_loop_050.model.gz"    # BD02
     # save_file = "MNIST/rand1k_runs/mnist1k_31/mps_loop_050.model.gz"    # BD10
-    save_file = "MNIST/rand1k_runs/mnist1k_23/mps_loop_050.model.gz"  # BD20
-    # save_file = "MNIST/rand1k_runs/mnist1k_25/mps_loop_050.model.gz"    # BD40
+    # save_file = "MNIST/rand1k_runs/mnist1k_23/mps_loop_050.model.gz"    # BD20
+    save_file = "MNIST/rand1k_runs/mnist1k_25/mps_loop_050.model.gz"  # BD40
     # save_file = "MNIST/rand1k_runs/mnist1k_40/mps_loop_020.model.gz"    # BD70
     # save_file = "MNIST/rand1k_runs/mnist1k_41/mps_loop_020.model.gz"    # BD100
     # save_file = "MNIST/rand1k_runs/mnist1k_42/mps_loop_015.model.gz"    # BD150
+
+    # Continuous MPS models
+    # save_file = "MNIST/rand1k_runs/mnist1k_44/mps_loop_016.model.gz"    # BD10
+    # save_file = "MNIST/rand1k_runs/mnist1k_46/mps_loop_016.model.gz"    # BD20
+    # save_file = "MNIST/rand1k_runs/mnist1k_47/mps_loop_010.model.gz"    # BD30
+    # save_file = "MNIST/rand1k_runs/mnist1k_48/mps_loop_012.model.gz"    # BD40
+    # save_file = "MNIST/rand1k_runs/mnist1k_49/mps_loop_014.model.gz"    # BD50
+
     with gzip.open(save_file, "rb") as f:
         mps = pickle.load(f)
     core_tensors, edge_vecs = MPS_c.export_params(mps)
@@ -214,10 +204,7 @@ def print_pretrained_samples():
     print(f"Bond_dim = {edge_vecs.shape[1]}")
 
     samples = sample(
-        core_tensors,
-        edge_vecs,
-        num_samples=num_samps
-        # core_tensors, edge_vecs, num_samples=num_samps, embed_obj=mps.embedding
+        core_tensors, edge_vecs, num_samples=num_samps, embed_fun=mps.embed_fun
     )
 
     # Reshape and rescale sampled values

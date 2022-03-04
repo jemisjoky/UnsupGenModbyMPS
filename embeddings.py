@@ -20,10 +20,12 @@
 # CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 """Uniform and non-uniform probabilistic MPS classes"""
-# from math import sqrt, pi
+from math import sqrt
 from functools import partial
 
+import torch
 import numpy as np
+from torch import einsum
 
 
 class FixedEmbedding:

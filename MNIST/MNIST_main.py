@@ -13,7 +13,8 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import MultipleLocator
 from comet_ml import Experiment
 
-from MPScumulant import MPS_c, loadMPS
+# from MPScumulant import MPS_c, loadMPS
+from MPScumulant_torch import MPS_c, loadMPS
 from embeddings import trig_embed
 
 # path.append("../")
@@ -231,23 +232,24 @@ def train(
             seed=SEED,
             embed_fun=EMBEDDING_FUN,
         )
-        mps.designate_data(TRAIN_SET.astype(np.float64))
-        # mps.designate_data(TRAIN_SET)
+        # mps.designate_data(TRAIN_SET.astype(np.float64))
+        mps.designate_data(TRAIN_SET)
         mps.get_train_loss()
         # test_loss = mps.get_test_loss(TEST_SET)
-        train_loss = mps.get_test_loss(TEST_SET.astype(np.float64))
-        test_loss = mps.get_test_loss(TEST_SET.astype(np.float64))
+        train_loss = mps.get_test_loss(TRAIN_SET)
+        test_loss = mps.get_test_loss(TEST_SET)
         init_time = time() - start_time
         loop_num = 0
         step_count = 1  # Calcuation of initial training loss counts as step
 
         # Add loss offset in case of embedded data
-        offset = log(2) * (28 ** 2) if EMBEDDING_FUN is not None else 0.
+        offset = log(2) * (28 ** 2) if EMBEDDING_FUN is not None else 0.0
 
         print_status(loop_num, mps, test_loss, init_time, offset)
         if LOGGER is not None:
             LOGGER.log_metrics(
-                {"train_loss": train_loss + offset, "test_loss": test_loss + offset}, epoch=0
+                {"train_loss": train_loss + offset, "test_loss": test_loss + offset},
+                epoch=0,
             )
 
     while loop_num < epochs:
@@ -327,15 +329,15 @@ if __name__ == "__main__":
 
     ### Hyperparameters for the experiment ###
     # for MAX_BDIM in [10, 20, 30, 40, 50, 70, 100, 150, 200, 300, 400, 500, 750, 1000]:
-    for MAX_BDIM in [10, 20, 30, 40, 50]:
+    for MAX_BDIM in [20, 30, 40, 50]:
         # MPS hyperparameters
         IN_DIM = 2
         MIN_BDIM = 1
         # MAX_BDIM = 10
         INIT_BDIM = 2
         SV_CUTOFF = 1e-7
-        EMBEDDING_FUN = partial(trig_embed, emb_dim=IN_DIM)
-        # EMBEDDING_FUN = None
+        # EMBEDDING_FUN = partial(trig_embed, emb_dim=IN_DIM)
+        EMBEDDING_FUN = None
         STEPS_PER_EPOCH = 2 * (28 ** 2) - 4
 
         # Training hyperparameters
@@ -345,11 +347,10 @@ if __name__ == "__main__":
         VERBOSITY = 1
         LR_SHRINK = 9e-2
         MIN_LR = 1e-5
-        COMET_LOG = True
-        # COMET_LOG = False
-        PROJECT_NAME = "hanetal-continuous-v1"
+        COMET_LOG = False
+        PROJECT_NAME = "hanetal-continuous-v2"
         EXP_NAME = f"bd{MAX_BDIM}_bdi{INIT_BDIM}_cut{SV_CUTOFF:1.0e}"
-        SAVE_MODEL = True
+        SAVE_MODEL = False
         SAVE_INTERMEDIATE = False
         SEED = 0
 
@@ -418,14 +419,3 @@ if __name__ == "__main__":
 
             # if argv[1] == "train_from_scratch":
             # init(warmup_loops=1)
-        # elif argv[1] == "plot":
-        #     mps.loadMPS("./Loop%dMPS" % int(argv[2]))
-
-        # # loss_plot(mps, True)
-        # np.random.seed(1996)
-        # sample_plot(mps, "z", 20)
-
-        # locs = np.asarray([t[0] for t in mps.losses])
-        # losses = np.asarray([t[1] for t in mps.losses])
-        # plt.plot(locs, losses)
-        # plt.show()
