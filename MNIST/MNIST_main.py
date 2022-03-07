@@ -7,6 +7,7 @@ from time import time
 from math import sqrt, log
 from functools import partial
 
+import torch
 import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -16,6 +17,7 @@ from comet_ml import Experiment
 # from MPScumulant import MPS_c, loadMPS
 from MPScumulant_torch import MPS_c, loadMPS
 from embeddings import trig_embed
+from utils import is_int_type
 
 # path.append("../")
 # mpl.use("Agg")
@@ -231,6 +233,7 @@ def train(
             init_bd=INIT_BDIM,
             seed=SEED,
             embed_fun=EMBEDDING_FUN,
+            device=DEVICE,
         )
         # mps.designate_data(TRAIN_SET.astype(np.float64))
         mps.designate_data(TRAIN_SET)
@@ -329,15 +332,15 @@ if __name__ == "__main__":
 
     ### Hyperparameters for the experiment ###
     # for MAX_BDIM in [10, 20, 30, 40, 50, 70, 100, 150, 200, 300, 400, 500, 750, 1000]:
-    for MAX_BDIM in [20, 30, 40, 50]:
+    for MAX_BDIM in [10, 20, 30, 40, 50]:
         # MPS hyperparameters
         IN_DIM = 2
         MIN_BDIM = 1
         # MAX_BDIM = 10
         INIT_BDIM = 2
         SV_CUTOFF = 1e-7
-        # EMBEDDING_FUN = partial(trig_embed, emb_dim=IN_DIM)
-        EMBEDDING_FUN = None
+        EMBEDDING_FUN = partial(trig_embed, emb_dim=IN_DIM)
+        # EMBEDDING_FUN = None
         STEPS_PER_EPOCH = 2 * (28 ** 2) - 4
 
         # Training hyperparameters
@@ -353,6 +356,10 @@ if __name__ == "__main__":
         SAVE_MODEL = False
         SAVE_INTERMEDIATE = False
         SEED = 0
+
+        # Get info about the available GPUs
+        n_gpu = torch.cuda.device_count()
+        DEVICE = "cpu" if n_gpu == 0 else "cudo:0"
 
         # Save hyperparameters, setup Comet logger
         if "PARAM_DICT" in globals().keys():
@@ -409,6 +416,9 @@ if __name__ == "__main__":
         TEST_SET = np.load(
             BIN_TEST_SET_NAME if EMBEDDING_FUN is None else TEST_SET_NAME
         )
+        TRAIN_SET, TEST_SET = torch.tensor(TRAIN_SET), torch.tensor(TEST_SET)
+        if EMBEDDING_FUN is None:
+            TRAIN_SET, TEST_SET = TRAIN_SET.long(), TEST_SET.long()
 
         if argv[1] == "init":
             mps = init()

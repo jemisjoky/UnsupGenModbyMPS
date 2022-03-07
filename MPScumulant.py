@@ -411,9 +411,10 @@ class MPS_c:
                 )
             gradient /= self.batchsize
             gradient -= 2 * self.merged_matrix
-
         self.merged_matrix += gradient * self.lr
         self.merged_matrix /= norm(self.merged_matrix)
+        if np.any(self.merged_matrix == 0):
+            print(f"Zero elms in merged_mat at k={k}, bid={batch_id}")
 
     def update_cumulants(self, gone_right_just_now):
         """After rebuid_bond, update self.cumulants.

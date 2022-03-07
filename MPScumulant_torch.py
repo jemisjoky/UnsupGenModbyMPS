@@ -29,6 +29,7 @@ class MPS_c:
         init_bd=2,
         seed=1,
         embed_fun=None,
+        device=None,
     ):
         """
         MPS class, with cumulant technique, efficient in DMRG-2
@@ -46,6 +47,7 @@ class MPS_c:
             seed: random seed used to set model parameters
             embed_fun: optional function embedding continuous-valued data into
                 vectors of dimension ``in_dim``
+            device: Pytorch device where all parameters should live
 
             bond_dims: list of bond dimensions, with bond_dims[i] connects i & i+1
             matrices: list of the tensors A^{(k)}
@@ -78,11 +80,20 @@ class MPS_c:
         self.min_bd = min_bd
         self.max_bd = max_bd
 
+        # Check to make sure input device is valid
+        if device is not None:
+            if isinstance(device, str):
+                device = torch.device(device)
+        else:
+            device = torch.device("cpu")
+        assert isinstance(device, torch.device)
+        self.device = device
+
         # Initialize bond dimensions and MPS core tensors
-        self.bond_dims = init_bd * torch.ones((mps_len,), dtype=torch.int16)
+        self.bond_dims = init_bd * torch.ones((mps_len,), dtype=torch.int16).to(self.device)
         self.bond_dims[-1] = 1
         self.matrices = [
-            torch.rand(self.bond_dims[i - 1], self.in_dim, self.bond_dims[i]).double()
+            torch.rand(self.bond_dims[i - 1], self.in_dim, self.bond_dims[i]).double().to(self.device)
             for i in range(mps_len)
         ]
 
@@ -102,7 +113,7 @@ class MPS_c:
         if embed_fun is not None:
             assert hasattr(embed_fun, "__call__")
             embed_mats = make_emb_mats(embed_fun)
-            self.E0, self.E1, self.E2 = [torch.tensor(m) for m in embed_mats]
+            self.E0, self.E1, self.E2 = [torch.tensor(m).to(self.device) for m in embed_mats]
             self.embed_fun = lambda inp: torch.tensor(embed_fun(inp))
         else:
             self.embed_fun = None
@@ -191,19 +202,19 @@ class MPS_c:
 
         # Pad the singular values and singular matrices if needed
         if len(s) < new_bd:
-            new_s = torch.zeros((new_bd,), dtype=s.dtype)
+            new_s = s.new_zeros((new_bd,))
             new_s[: len(s)] = s
             s = new_s
         else:
             s = s[:new_bd]
         if U.shape[1] < new_bd:
-            new_U = torch.zeros((U.shape[0], new_bd), dtype=U.dtype)
+            new_U = U.new_zeros((U.shape[0], new_bd))
             new_U[:, : U.shape[1]] = U
             U = new_U
         else:
             U = U[:, :new_bd]
         if V.shape[0] < new_bd:
-            new_V = torch.zeros((new_bd, V.shape[1]), dtype=V.dtype)
+            new_V = V.new_zeros((new_bd, V.shape[1]))
             new_V[: V.shape[0]] = V
             V = new_V
         else:
@@ -255,12 +266,12 @@ class MPS_c:
         if is_int_type(dataset):
             # Dataset of discrete inputs, involves indexing cores
             assert not self.embedded_input
-            self.data = torch.tensor(dataset).long()
+            self.data = dataset.to(self.device)
         else:
             # Continuous data is handled by user-specified embedding function
             assert self.embedded_input
             assert is_float_type(dataset)
-            self.data = self.embed_fun(dataset)
+            self.data = self.embed_fun(dataset.to(self.device))
         self.batchsize = self.data.shape[0] // self.nbatch
         self.init_cumulants()
 
@@ -371,8 +382,8 @@ class MPS_c:
         psi_inv = 1 / psi
         if torch.any(psi == 0):
             print(
-                "Error: At bond %d, batchsize=%d, while %d of them psi=0."
-                % (self.current_bond, self.batchsize, (psi == 0).sum())
+                "Error: At bond %d, batch_id=%d, while %d of them psi=0."
+                % (self.current_bond, batch_id, (psi == 0).sum())
             )
             # print(torch.argmax(psi == 0).ravel())
             print("Maybe you should decrease n_batch")
@@ -406,7 +417,7 @@ class MPS_c:
         # this before gradient before it is applied to the merged matrix, and
         # the result is finally normalized so the merged matrix has unit norm.
         else:
-            gradient = torch.zeros(
+            gradient = self.merged_matrix.new_zeros(
                 (
                     self.bond_dims[km1],
                     self.in_dim,
@@ -419,9 +430,10 @@ class MPS_c:
                 gradient[:, i, j, :] = 2 * (
                     torch.einsum("Bjk,B->jk", phi_mat[idx, :, :], psi_inv[idx])
                 )
-
         self.merged_matrix += gradient * self.lr
         self.merged_matrix /= norm(self.merged_matrix)
+        if torch.any(self.merged_matrix == 0):
+            print(f"Zero elms in merged_mat at k={k}, bid={batch_id}")
 
     @torch.no_grad()
     def update_cumulants(self, gone_right_just_now):
@@ -593,8 +605,8 @@ class MPS_c:
             nsam = states.shape[0]
             k = self.current_bond
             kp1 = (k + 1) % self.mps_len
-            left_vecs = torch.ones((nsam, 1))
-            right_vecs = torch.ones((1, nsam))
+            left_vecs = self.merged_matrix.new_ones((nsam, 1))
+            right_vecs = self.merged_matrix.new_ones((1, nsam))
             for i in range(0, k):
                 left_vecs = torch.einsum(
                     "Bj,jBk->Bk", left_vecs, slice_core(self.matrices[i], states[:, i])
@@ -631,9 +643,8 @@ class MPS_c:
         """
         Get the NLL averaged on the test set
         """
-        test_set = torch.tensor(test_set)
         if self.embedded_input:
-            test_set = self.embed_fun(test_set)
+            test_set = self.embed_fun(test_set.to(self.device))
         return -2 * self.get_prob_amps(test_set).abs().log().mean()
 
     @torch.no_grad()
@@ -953,13 +964,13 @@ class MPS_c:
         for core in self.matrices:
             assert len(core.shape) == 3
             left_bd, right_bd = core.shape[0], core.shape[2]
-            pad_core = torch.zeros((self.in_dim, max_bd, max_bd))
+            pad_core = core.new_zeros((self.in_dim, max_bd, max_bd))
             pad_core[:, :left_bd, :right_bd] = core.transpose(1, 0, 2)
             core_list.append(pad_core)
         core_tensors = torch.stack(core_list, dim=0)
 
         # Edge vectors just pick out the first basis vector
-        edge_vecs = torch.zeros((2, max_bd))
+        edge_vecs = core.new_zeros((2, max_bd))
         edge_vecs[:, 0] = 1
 
         return core_tensors, edge_vecs
@@ -991,7 +1002,6 @@ def slice_core(core_tensor, inputs):
     if is_int_type(inputs):
         return core_tensor[:, inputs, :]
     else:
-        print(inputs.dtype)
         return torch.einsum("jak,Ba->jBk", core_tensor, inputs)
 
 
