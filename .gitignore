@@ -1,5 +1,6 @@
 # Data from MNIST experiment runs
 MNIST/rand1k_runs/*
+log_dir/
 
 # Comet data logging API key
 .comet.config
