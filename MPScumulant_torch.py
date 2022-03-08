@@ -5,6 +5,7 @@ class MPS cumulant
 """
 import pickle
 from itertools import product
+from functools import partial
 
 import gzip
 import torch
@@ -13,6 +14,11 @@ from torch.linalg import norm
 
 from utils import is_int_type, is_float_type
 from embeddings import make_emb_mats
+
+
+# SVD function (full SVD)
+svd = partial(torch.svd, some=False)
+# svd = torch.linalg.svd
 
 
 class MPS_c:
@@ -170,8 +176,7 @@ class MPS_c:
                 "jabk,ac,bd->jcdk", self.merged_matrix, self.E1, self.E1
             )
 
-        U, s, V = torch.svd(
-            # U, s, V = torch.linalg.svd(
+        U, s, V = svd(
             self.merged_matrix.reshape(
                 (
                     self.bond_dims[(k - 1) % self.mps_len] * self.in_dim,
@@ -306,7 +311,7 @@ class MPS_c:
         for n in range(0, self.current_bond):
             self.cumulants.append(
                 torch.einsum(
-                    "Bj,jBk->Bk",
+                    "bj,jbk->bk",
                     self.cumulants[-1],
                     slice_core(self.matrices[n], self.data[:, n]),
                 )
@@ -315,7 +320,7 @@ class MPS_c:
         for n in range(self.mps_len - 1, self.current_bond + 1, -1):
             right_part = [
                 torch.einsum(
-                    "jBl,lB->jB",
+                    "jbl,lb->jb",
                     slice_core(self.matrices[n], self.data[:, n]),
                     right_part[0],
                 )
@@ -330,7 +335,7 @@ class MPS_c:
         k = self.current_bond
         if self.merged_matrix is None:
             return torch.einsum(
-                "Bj,jBk,kBl,lB->B",
+                "bj,jbk,kbl,lb->b",
                 self.cumulants[k],
                 slice_core(self.matrices[k], self.data[:, k]),
                 slice_core(self.matrices[k + 1], self.data[:, k + 1]),
@@ -338,7 +343,7 @@ class MPS_c:
             )
         else:
             return torch.einsum(
-                "Bj,jBk,kB->B",
+                "bj,jbk,kb->b",
                 self.cumulants[k],
                 slice_merged_core(
                     self.merged_matrix, self.data[:, k], self.data[:, k + 1]
@@ -376,11 +381,11 @@ class MPS_c:
         right_vecs = self.cumulants[kp1][:, indx]  # shape = (D, batchsize)
 
         # Batch of rank-1 matrices containing left and right environments
-        phi_mat = torch.einsum("Bj,kB->Bjk", left_vecs, right_vecs)
+        phi_mat = torch.einsum("bj,kb->bjk", left_vecs, right_vecs)
 
         # Probability amplitudes associated with all inputs in the batch
         psi = torch.einsum(
-            "Bj,jBk,kB->B",
+            "bj,jbk,kb->b",
             left_vecs,
             slice_merged_core(self.merged_matrix, states[:, k], states[:, kp1]),
             right_vecs,
@@ -399,7 +404,7 @@ class MPS_c:
         if self.embedded_input:
             gradient = 2 * (
                 torch.einsum(
-                    "Bjk,Ba,Bb,B->jabk",
+                    "bjk,bc,bd,b->jcdk",
                     phi_mat,
                     states[:, k, :],
                     states[:, kp1, :],
@@ -435,7 +440,7 @@ class MPS_c:
             for i, j in product(range(self.in_dim), range(self.in_dim)):
                 idx = (states[:, k] == i) * (states[:, kp1] == j)
                 gradient[:, i, j, :] = 2 * (
-                    torch.einsum("Bjk,B->jk", phi_mat[idx, :, :], psi_inv[idx])
+                    torch.einsum("bjk,b->jk", phi_mat[idx, :, :], psi_inv[idx])
                 )
         self.merged_matrix += gradient * self.lr
         self.merged_matrix /= norm(self.merged_matrix)
@@ -451,13 +456,13 @@ class MPS_c:
         k = self.current_bond
         if gone_right_just_now:
             self.cumulants[k] = torch.einsum(
-                "Bj,jBk->Bk",
+                "bj,jbk->bk",
                 self.cumulants[k - 1],
                 slice_core(self.matrices[k - 1], self.data[:, k - 1]),
             )
         else:
             self.cumulants[k + 1] = torch.einsum(
-                "jBk,kB->jB",
+                "jbk,kb->jb",
                 slice_core(self.matrices[k + 2], self.data[:, k + 2]),
                 self.cumulants[k + 2],
             )
@@ -616,14 +621,14 @@ class MPS_c:
             right_vecs = self.merged_matrix.new_ones((1, nsam))
             for i in range(0, k):
                 left_vecs = torch.einsum(
-                    "Bj,jBk->Bk", left_vecs, slice_core(self.matrices[i], states[:, i])
+                    "bj,jbk->bk", left_vecs, slice_core(self.matrices[i], states[:, i])
                 )
             for i in range(self.mps_len - 1, k + 1, -1):
                 right_vecs = torch.einsum(
-                    "jBk,kB->jB", slice_core(self.matrices[i], states[:, i]), right_vecs
+                    "jbk,kb->jb", slice_core(self.matrices[i], states[:, i]), right_vecs
                 )
             return torch.einsum(
-                "Bk,kBl,lB->B",
+                "bk,kbl,lb->b",
                 left_vecs,
                 slice_merged_core(self.merged_matrix, states[:, k], states[:, kp1]),
                 right_vecs,
@@ -637,10 +642,10 @@ class MPS_c:
             #     sys.exit(-10)
             for n in range(1, self.mps_len - 1):
                 left_vecs = torch.einsum(
-                    "Bj,jBl->Bl", left_vecs, slice_core(self.matrices[n], states[:, n])
+                    "bj,jbl->bl", left_vecs, slice_core(self.matrices[n], states[:, n])
                 )
             return torch.einsum(
-                "Bj,jB->B",
+                "bj,jb->b",
                 left_vecs,
                 slice_core(self.matrices[-1], states[:, -1])[:, :, 0],
             )
@@ -1009,7 +1014,7 @@ def slice_core(core_tensor, inputs):
     if is_int_type(inputs):
         return core_tensor[:, inputs, :]
     else:
-        return torch.einsum("jak,Ba->jBk", core_tensor, inputs)
+        return torch.einsum("jak,ba->jbk", core_tensor, inputs)
 
 
 def slice_merged_core(merged_core, left_inputs, right_inputs):
@@ -1020,4 +1025,4 @@ def slice_merged_core(merged_core, left_inputs, right_inputs):
     if is_int_type(left_inputs):
         return merged_core[:, left_inputs, right_inputs, :]
     else:
-        return torch.einsum("jabk,Ba,Bb->jBk", merged_core, left_inputs, right_inputs)
+        return torch.einsum("jcdk,bc,bd->jbk", merged_core, left_inputs, right_inputs)

@@ -86,7 +86,7 @@ def to_slurm(args, exp_dir, run_script, script_args):
         # Environment variables to pass to the experiment script
         f"--export=ALL,LOG_DIR={str(exp_dir)},LOG_FILE={str(exp_dir / 'exp_record.log')}",
         # Experiment script itself
-        run_script,
+        str(run_script),
     ]
     # Other arguments that will be fed to script
     slurm_call += script_args
