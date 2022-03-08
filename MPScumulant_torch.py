@@ -307,7 +307,7 @@ class MPS_c:
             # In this case, the MPS is left-canonicalized except the right most one, so the bond to be merged is mps_len-2
             self.current_bond -= 1
 
-        self.cumulants = [torch.ones((self.data.shape[0], 1))]
+        self.cumulants = [self.matrices[0].new_ones((self.data.shape[0], 1))]
         for n in range(0, self.current_bond):
             self.cumulants.append(
                 torch.einsum(
@@ -316,7 +316,7 @@ class MPS_c:
                     slice_core(self.matrices[n], self.data[:, n]),
                 )
             )
-        right_part = [torch.ones((1, self.data.shape[0]))]
+        right_part = [self.matrices[0].new_ones((1, self.data.shape[0]))]
         for n in range(self.mps_len - 1, self.current_bond + 1, -1):
             right_part = [
                 torch.einsum(
