@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import os
-import re
 import sys
 import json
 from sys import argv
@@ -18,8 +17,8 @@ sys.path.insert(0, "/home/mila/m/millerja/UnsupGenModbyMPS")
 
 # from MPScumulant import MPS_c, loadMPS
 from MPScumulant_torch import MPS_c, loadMPS
+from exp_tracker import setup_logging
 from embeddings import trig_embed
-from utils import is_int_type
 
 np.set_printoptions(5, linewidth=4 * 28)
 
@@ -32,72 +31,6 @@ def sample_image(mps, typ):
         for n in range(1, a, 2):
             img[n, :] = img[n, ::-1]
     return img
-
-
-def find_last_file(search_dir, pattern, return_number=True, return_path=True):
-    """
-    Search among files or directories matching a pattern, find the last one
-
-    The pattern will always involve some numerical substring, which is used as
-    the ranking criteria. If no files exist with
-
-    Args:
-        search_dir: The directory which will be searched (non-recursively) for
-            objects matching the desired pattern
-        pattern: Regular expression containing a single group matching digits,
-            to be fed into `re.compile`
-        return_number: Whether to return the number associated with the file
-        return_path: Whether to return the path to the file
-
-    Returns:
-        number: The number associated with the file
-        path: The path of the file
-    """
-    if search_dir[-1] != "/":
-        search_dir += "/"
-    assert os.path.isdir(search_dir)
-    assert return_number or return_path
-    file_list = os.listdir(search_dir)
-    regex = re.compile(pattern)
-    matches = [regex.match(f) for f in file_list]
-    if any(matches):
-        idx, m = max(
-            enumerate([m for m in matches if m]), key=lambda x: int(x[1].groups()[0])
-        )
-        num = int(m.groups()[0])
-        path = search_dir + file_list[idx]
-
-        # Proper formatting for directories
-        assert os.path.exists(path)
-        if os.path.isdir(path) and path[-1] != "/":
-            path += "/"
-    else:
-        num, path = -1, ""
-
-    if return_number and return_path:
-        return num, path
-    elif return_number:
-        return num
-    else:
-        return path
-
-
-def find_latest_exp():
-    """
-    Find the most recent MPS experiment in MPS experiments folder
-
-    Returns the index of this MPS experiment
-    """
-    return find_last_file(RUN_DIR, EXP_PREFIX + r"(\d+)")
-
-
-def find_latest_MPS(exp_folder):
-    """
-    Find the latest MPS checkpoint Pickle file in given MPS experiments folder
-
-    Returns the index and path of the latest checkpoint file
-    """
-    return find_last_file(exp_folder, SAVEFILE_REGEX)
 
 
 def print_status(loop_num, mps, test_loss, epoch_time, offset):
@@ -130,36 +63,7 @@ def print_status(loop_num, mps, test_loss, epoch_time, offset):
     time_format = "{0:<{w}} {1:.1f}s"
     formats = [loss_format] * 2 + [maxbd_format, meanbd_format] + [time_format]
     for format_str, (head, value) in zip(formats, to_print.items()):
-        print(format_str.format(head, value, w=head_width))
-
-
-def init(warmup_loops=1):
-    """Start the training, in a relatively high cutoff, over usually just 1 epoch"""
-    # Create experiment directory
-    if not os.path.isdir(RUN_DIR):
-        os.mkdir(RUN_DIR)
-    exp_num = find_latest_exp()[0] + 1
-    exp_folder = RUN_DIR + f"{EXP_PREFIX}{exp_num}/"
-    os.mkdir(exp_folder)
-
-    # Initialize model
-    mps = MPS_c(28 * 28)
-    mps.designate_data(TRAIN_SET)
-    mps.nbatch = 10
-    mps.lr = 0.05
-    mps.cutoff = 0.3
-
-    # Optionally train model, comparing initial and final losses
-    mps.get_train_loss()
-    print_status(0, mps)
-    if warmup_loops > 0:
-        cut_rec = mps.train(num_epochs=warmup_loops, rec_cut=True)
-        mps.cutoff = cut_rec
-        print_status(warmup_loops, mps)
-
-    # mps.saveMPS(f"{exp_folder}{chk_prefix}{warmup_loops}{chk_suffix}")
-    if SAVE_MODEL:
-        mps.saveMPS(SAVEFILE_TEMPLATE.format(exp_folder, warmup_loops))
+        print_fun(format_str.format(head, value, w=head_width))
 
 
 def train(
@@ -171,26 +75,22 @@ def train(
     """
     # Find the state of most recent MPS experiment and load it
     if continue_last:
-        exp_num, exp_folder = find_latest_exp()
-        assert exp_num >= 0
-        loop_num, save_path = find_latest_MPS(exp_folder)
-        if loop_num > 0:
-            print(f"Resuming: Loop {loop_num + 1}")
-        mps = loadMPS(save_path, dataset_path=TRAIN_SET_NAME)
-        step_count = len(mps.losses)
+        raise NotImplementedError
+        # exp_num, exp_folder = find_latest_exp()
+        # assert exp_num >= 0
+        # loop_num, save_path = find_latest_MPS(exp_folder)
+        # if loop_num > 0:
+        #     print_fun(f"Resuming: Loop {loop_num + 1}")
+        # mps = loadMPS(save_path, dataset_path=TRAIN_SET_NAME)
+        # step_count = len(mps.losses)
 
     # Initialize a new MPS with desired hyperparameters
     else:
         # Create experiment directory
         if SAVE_MODEL:
-            if not os.path.isdir(RUN_DIR):
-                os.mkdir(RUN_DIR)
-            exp_num = find_latest_exp()[0] + 1
-            exp_folder = RUN_DIR + f"{EXP_PREFIX}{exp_num}/"
-            os.mkdir(exp_folder)
-
             # Log the experimental parameters in the folder
-            with open(f"{exp_folder}{EXP_NAME}.json", "w") as f:
+            log_path = os.path.join(LOG_DIR, f"{EXP_NAME}.json")
+            with open(log_path, "a") as f:
                 json.dump(PARAM_DICT, f, indent=4)
 
         # Initialize model
@@ -232,7 +132,7 @@ def train(
     while loop_num < epochs:
         # if mps.minibond > 1 and mps.bond_dims.mean() > 10:
         #     mps.minibond = 1
-        #     print("From now bondDmin=1")
+        #     print_fun("From now bondDmin=1")
 
         # Train the model while testing to see if learning rate is too large
         good_lr = False
@@ -245,15 +145,15 @@ def train(
             # If loss is increasing, turn down LR and redo training
             if mps.losses[-1][-1] > loss_last and SAVE_MODEL:
                 new_lr = mps.lr * LR_SHRINK
-                print(f"lr={mps.lr:1.3e} is too large, decreasing to lr={new_lr:1.3e}")
+                print_fun(
+                    f"lr={mps.lr:1.3e} is too large, decreasing to lr={new_lr:1.3e}"
+                )
                 if new_lr < MIN_LR:
-                    print("lr is negligible, ending training")
+                    print_fun("lr is negligible, ending training")
                     return
 
                 # Load the last saved MPS and run it again with the reduced lr
-                mps = loadMPS(
-                    find_latest_MPS(exp_folder)[1], dataset_path=TRAIN_SET_NAME
-                )
+                mps = loadMPS(mps_path, dataset_path=TRAIN_SET_NAME)
                 mps.lr = new_lr
 
             # Otherwise save the model and keep going
@@ -261,21 +161,18 @@ def train(
                 good_lr = True
                 loop_num += 1
                 test_loss = mps.get_test_loss(TEST_SET)
+                mps_path = os.path.join(LOG_DIR, f"{EXP_NAME}_{loop_num}.model")
                 if SAVE_MODEL:
-                    last_loop, last_path = find_latest_MPS(exp_folder)
-                    mps.saveMPS(SAVEFILE_TEMPLATE.format(exp_folder, loop_num))
-                # if any(bd > 40 for bd in mps.bond_dims):
-                #     mps.verbose = 2
+                    mps.saveMPS(mps_path)
+                    # Remove the last model state
+                    if not SAVE_INTERMEDIATE and loop_num > 1:
+                        old_path = os.path.join(
+                            LOG_DIR, f"{EXP_NAME}_{loop_num-1}.model"
+                        )
+                        os.remove(old_path)
 
                 # Add loss offset in case of embedded data
                 print_status(loop_num, mps, test_loss, epoch_time, offset)
-
-                # If we're not keeping intermediate states, remove the last one
-                if SAVE_MODEL and not SAVE_INTERMEDIATE:
-                    this_loop, _ = find_latest_MPS(exp_folder)
-                    if last_loop > -1:
-                        assert this_loop == last_loop + 1
-                        os.remove(last_path)
 
                 # Log the data
                 if LOGGER is not None:
@@ -304,7 +201,9 @@ if __name__ == "__main__":
     # Must be called with at least one command
     assert len(argv) > 1
 
-    ### Hyperparameters for the experiment ###
+    #
+    # Hyperparameters for the experiment
+    #
     # for MAX_BDIM in [10, 20, 30, 40, 50, 70, 100, 150, 200, 300, 400, 500, 750, 1000]:
     for MAX_BDIM in [10, 20, 30, 40, 50]:
         # MPS hyperparameters
@@ -325,15 +224,28 @@ if __name__ == "__main__":
         LR_SHRINK = 9e-2
         MIN_LR = 1e-5
         COMET_LOG = False
-        PROJECT_NAME = "hanetal-continuous-v2"
-        EXP_NAME = f"bd{MAX_BDIM}_bdi{INIT_BDIM}_cut{SV_CUTOFF:1.0e}"
-        SAVE_MODEL = False
+        PROJECT_NAME = "hanetal-cluster-v1"
+        SAVE_MODEL = True
         SAVE_INTERMEDIATE = False
         SEED = 0
 
         # Get info about the available GPUs
         n_gpu = torch.cuda.device_count()
-        DEVICE = "cpu" if n_gpu == 0 else "cudo:0"
+        DEVICE = "cpu" if n_gpu == 0 else "cuda:0"
+
+        # Setup save directories and logging
+        EXP_NAME = f"bd{MAX_BDIM}{'' if DEVICE == 'cpu' else '_gpu'}"
+        LOG_DIR = os.getenv("LOG_DIR")
+        LOG_FILE = os.getenv("LOG_FILE")
+        assert (LOG_DIR is None) == (LOG_FILE is None)
+        if LOG_DIR:
+            # Shadow print function with logging function
+            logging = setup_logging(LOG_FILE)
+            print_fun = logging.info
+        else:
+            print_fun = print
+            # No model saving if we're running locally
+            SAVE_MODEL = False
 
         # Save hyperparameters, setup Comet logger
         if "PARAM_DICT" in globals().keys():
@@ -341,14 +253,11 @@ if __name__ == "__main__":
                 "PARAM_DICT",
                 "LOGGER",
                 "MNIST_DIR",
-                "RUN_DIR",
                 "EXP_PREFIX",
                 "BIN_TRAIN_SET_NAME",
                 "BIN_TEST_SET_NAME",
                 "TRAIN_SET_NAME",
                 "TEST_SET_NAME",
-                "SAVEFILE_TEMPLATE",
-                "SAVEFILE_REGEX",
                 "TRAIN_SET",
                 "TEST_SET",
             ]
@@ -368,7 +277,6 @@ if __name__ == "__main__":
 
         # Relevant directories for the random 1k images experiment
         MNIST_DIR = "./MNIST/"
-        RUN_DIR = MNIST_DIR + "rand1k_runs/"  # Location of experiment logs
         EXP_PREFIX = "mnist1k_"  # Prefix for individual experiment directories
         BIN_TRAIN_SET_NAME = MNIST_DIR + "mnist-rand1k_28_thr50_z/paper_data.npy"
         # BIN_TRAIN_SET_NAME = MNIST_DIR + "mnist-rand1k_28_thr50_z/full_train.npy"
@@ -380,8 +288,6 @@ if __name__ == "__main__":
         )
         TRAIN_SET_NAME = MNIST_DIR + "mnist-rand1k_28_thr50_z/first1k_train.npy"
         TEST_SET_NAME = MNIST_DIR + "mnist-rand1k_28_thr50_z/first1k_test.npy"
-        SAVEFILE_TEMPLATE = "{}mps_loop_{:03d}.model.gz"
-        SAVEFILE_REGEX = r"mps_loop_(\d+)\.model\.gz"
 
         # Load 1000 random MNIST images
         TRAIN_SET = np.load(
@@ -394,12 +300,7 @@ if __name__ == "__main__":
         if EMBEDDING_FUN is None:
             TRAIN_SET, TEST_SET = TRAIN_SET.long(), TEST_SET.long()
 
-        if argv[1] == "init":
-            mps = init()
-        elif argv[1] in ["train_from_scratch", "continue"]:
-            # Initialize a new model if we're not continuing
-            continue_last = argv[1] == "continue"
-            train(EPOCHS, continue_last=continue_last)
-
-            # if argv[1] == "train_from_scratch":
-            # init(warmup_loops=1)
+        assert argv[1] in ["train_from_scratch", "continue"]
+        # Initialize a new model if we're not continuing
+        continue_last = argv[1] == "continue"
+        train(EPOCHS, continue_last=continue_last)

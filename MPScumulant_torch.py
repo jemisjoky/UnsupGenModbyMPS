@@ -126,7 +126,7 @@ class MPS_c:
             self.E0, self.E1, self.E2 = [
                 torch.tensor(m).to(self.device) for m in embed_mats
             ]
-            self.embed_fun = lambda inp: torch.tensor(embed_fun(inp))
+            self.embed_fun = embed_fun
         else:
             self.embed_fun = None
 
@@ -283,7 +283,9 @@ class MPS_c:
             # Continuous data is handled by user-specified embedding function
             assert self.embedded_input
             assert is_float_type(dataset)
-            self.data = self.embed_fun(dataset.to(self.device))
+            self.data = torch.tensor(
+                self.embed_fun(dataset.to("cpu")), device=self.device
+            )
         self.batchsize = self.data.shape[0] // self.nbatch
         self.init_cumulants()
 
@@ -354,7 +356,7 @@ class MPS_c:
     @torch.no_grad()
     def get_train_loss(self, append=True):
         """Get the NLL averaged on the training set"""
-        L = -2 * np.log(np.abs(self.Give_psi_cumulant())).mean()  # - self.data_shannon
+        L = -2 * self.Give_psi_cumulant().abs().log().mean()  # - self.data_shannon
         if append:
             self.losses.append([self.current_bond, L])
         return L
@@ -656,7 +658,9 @@ class MPS_c:
         Get the NLL averaged on the test set
         """
         if self.embedded_input:
-            test_set = self.embed_fun(test_set.to(self.device))
+            test_set = torch.tensor(
+                self.embed_fun(test_set.to("cpu")), device=self.device
+            )
         return -2 * self.get_prob_amps(test_set).abs().log().mean()
 
     @torch.no_grad()
@@ -997,7 +1001,7 @@ def loadMPS(save_file, dataset_path=None):
 
     if dataset_path is not None:
         dataset = np.load(dataset_path)
-        mps.designate_data(dataset)
+        mps.designate_data(torch.tensor(dataset).to(mps.device))
 
     return mps
 

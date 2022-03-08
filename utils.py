@@ -4,8 +4,12 @@ import torch
 import numpy as np
 
 
-INTS = tuple(getattr(np, f"int{nb}") for nb in [8, 16, 32, 64]) + ("uint8",)
-FLOATS = tuple(getattr(np, f"float{nb}") for nb in [16, 32, 64, 128])
+T_INTS = tuple(getattr(torch, f"int{nb}") for nb in [8, 16, 32, 64])
+NP_INTS = tuple(getattr(np, f"int{nb}") for nb in [8, 16, 32, 64]) + (np.uint8,)
+INTS = NP_INTS + T_INTS
+T_FLOATS = tuple(getattr(torch, f"float{nb}") for nb in [16, 32, 64])
+NP_FLOATS = tuple(getattr(np, f"float{nb}") for nb in [16, 32, 64, 128])
+FLOATS = NP_FLOATS + T_FLOATS
 COMPLEXES = tuple(getattr(np, f"complex{nb}") for nb in [64, 128, 256])
 
 
@@ -39,9 +43,6 @@ def is_int_type(array):
     """
     Computes whether input array is integral type (e.g. np.intXX)
     """
-    if isinstance(array, torch.Tensor):
-        array = array.numpy()
-    assert isinstance(array, np.ndarray)
     return array.dtype in INTS
 
 
@@ -49,9 +50,6 @@ def is_float_type(array):
     """
     Computes whether input array is non-complex float type (e.g. np.floatXX)
     """
-    if isinstance(array, torch.Tensor):
-        array = array.numpy()
-    assert isinstance(array, np.ndarray)
     return array.dtype in FLOATS
 
 
