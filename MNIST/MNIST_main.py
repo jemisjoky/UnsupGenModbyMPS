@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import os
 import re
+import sys
 import json
 from sys import argv
 from time import time
@@ -9,18 +10,16 @@ from functools import partial
 
 import torch
 import numpy as np
-import matplotlib as mpl
-import matplotlib.pyplot as plt
-from matplotlib.ticker import MultipleLocator
 from comet_ml import Experiment
+
+# Make MPS functions available for import
+sys.path.insert(0, "/home/mila/m/millerja/UnsupGenModbyMPS")
 
 # from MPScumulant import MPS_c, loadMPS
 from MPScumulant_torch import MPS_c, loadMPS
 from embeddings import trig_embed
 from utils import is_int_type
 
-# path.append("../")
-# mpl.use("Agg")
 np.set_printoptions(5, linewidth=4 * 28)
 
 
@@ -32,32 +31,6 @@ def sample_image(mps, typ):
         for n in range(1, a, 2):
             img[n, :] = img[n, ::-1]
     return img
-
-
-def sample_plot(mps, typ, nn):
-    ncol = int(sqrt(nn))
-    while nn % ncol != 0:
-        ncol -= 1
-    fig, axs = plt.subplots(nn // ncol, ncol)
-    for ax in axs.flatten():
-        ax.matshow(sample_image(mps, typ), cmap=mpl.cm.gray_r)
-        ax.set_xticks([])
-        ax.set_yticks([])
-    plt.savefig("samples.pdf")
-
-
-def loss_plot(mps, spars):
-    fig, ax = plt.subplots()
-    nsteps = 2 * mps.mps_len - 4
-    if spars:
-        ax.plot(np.arange(len(mps.losses)) * (nsteps // 2), mps.losses, ".")
-    else:
-        ax.plot(mps.losses)
-    ax.xaxis.set_major_locator(MultipleLocator(nsteps))
-    ax.xaxis.set_minor_locator(MultipleLocator(nsteps // 2))
-    ax.xaxis.grid(which="both")
-    ax.set_xticks([])
-    plt.savefig("Loss.pdf")
 
 
 def find_last_file(search_dir, pattern, return_number=True, return_path=True):
@@ -222,7 +195,7 @@ def train(
         # Initialize model
         start_time = time()
         mps = MPS_c(
-            28 ** 2,
+            28**2,
             in_dim=IN_DIM,
             cutoff=SV_CUTOFF,
             lr=LR,
@@ -246,7 +219,7 @@ def train(
         step_count = 1  # Calcuation of initial training loss counts as step
 
         # Add loss offset in case of embedded data
-        offset = log(2) * (28 ** 2) if EMBEDDING_FUN is not None else 0.0
+        offset = log(2) * (28**2) if EMBEDDING_FUN is not None else 0.0
 
         print_status(loop_num, mps, test_loss, init_time, offset)
         if LOGGER is not None:
@@ -341,7 +314,7 @@ if __name__ == "__main__":
         SV_CUTOFF = 1e-7
         EMBEDDING_FUN = partial(trig_embed, emb_dim=IN_DIM)
         # EMBEDDING_FUN = None
-        STEPS_PER_EPOCH = 2 * (28 ** 2) - 4
+        STEPS_PER_EPOCH = 2 * (28**2) - 4
 
         # Training hyperparameters
         LR = 1e-3

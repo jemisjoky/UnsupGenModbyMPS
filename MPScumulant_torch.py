@@ -9,7 +9,7 @@ from itertools import product
 import gzip
 import torch
 import numpy as np
-from torch.linalg import norm, svd
+from torch.linalg import norm
 
 from utils import is_int_type, is_float_type
 from embeddings import make_emb_mats
@@ -90,10 +90,14 @@ class MPS_c:
         self.device = device
 
         # Initialize bond dimensions and MPS core tensors
-        self.bond_dims = init_bd * torch.ones((mps_len,), dtype=torch.int16).to(self.device)
+        self.bond_dims = init_bd * torch.ones((mps_len,), dtype=torch.int16).to(
+            self.device
+        )
         self.bond_dims[-1] = 1
         self.matrices = [
-            torch.rand(self.bond_dims[i - 1], self.in_dim, self.bond_dims[i]).double().to(self.device)
+            torch.rand(self.bond_dims[i - 1], self.in_dim, self.bond_dims[i])
+            .double()
+            .to(self.device)
             for i in range(mps_len)
         ]
 
@@ -113,7 +117,9 @@ class MPS_c:
         if embed_fun is not None:
             assert hasattr(embed_fun, "__call__")
             embed_mats = make_emb_mats(embed_fun)
-            self.E0, self.E1, self.E2 = [torch.tensor(m).to(self.device) for m in embed_mats]
+            self.E0, self.E1, self.E2 = [
+                torch.tensor(m).to(self.device) for m in embed_mats
+            ]
             self.embed_fun = lambda inp: torch.tensor(embed_fun(inp))
         else:
             self.embed_fun = None
@@ -164,7 +170,8 @@ class MPS_c:
                 "jabk,ac,bd->jcdk", self.merged_matrix, self.E1, self.E1
             )
 
-        U, s, V = svd(
+        U, s, V = torch.svd(
+            # U, s, V = torch.linalg.svd(
             self.merged_matrix.reshape(
                 (
                     self.bond_dims[(k - 1) % self.mps_len] * self.in_dim,
@@ -794,7 +801,7 @@ class MPS_c:
             for p in range(plft2 + 1, self.mps_len):
                 vec_act = vec @ self.matrices[p][:, 1]
                 nom = norm(vec_act)
-                if torch.rand() < nom ** 2:
+                if torch.rand() < nom**2:
                     # activate
                     state[p] = 1
                     vec = vec_act / nom
@@ -806,7 +813,7 @@ class MPS_c:
             for p in torch.arange(plft)[::-1]:
                 vec_act = self.matrices[p][:, 1] @ vec
                 nom = norm(vec_act)
-                if torch.rand() < nom ** 2:
+                if torch.rand() < nom**2:
                     state[p] = 1
                     vec = vec_act / nom
                 else:
