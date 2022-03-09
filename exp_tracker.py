@@ -71,26 +71,30 @@ def copy_script(file, exp_dir):
 def to_slurm(args, exp_dir, run_script, script_args):
     """
     Send experimental script to Slurm (sbatch) with user-specified options
+
+    If args.local is False, script will be run directly by Python interpreter
     """
     # Generate all the information for the call to sbatch
-    slurm_call = [
-        "sbatch",
-        # Name of Slurm job
-        f"--job-name=jorb_{str(exp_dir).split(sep='_')[-1]}",
-        # Location of Slurm output file
-        f"--output={str(exp_dir / 'slurm_log.out')}",
-        # Number of GPUs
-        f"--gpus={args.gpus}",
-        # Minimum memory per CPU
-        f"--mem-per-cpu={args.mem_per_cpu}G",
-        # Run on unkillable partition by default
-        f"--partition=unkillable",
-        # Environment variables to pass to the experiment script
-        f"--export=ALL,LOG_DIR={str(exp_dir)},LOG_FILE={str(exp_dir / 'exp_record.log')}",
-        # Experiment script itself
-        str(run_script),
-    ]
-    # Other arguments that will be fed to script
+    if not args.local:
+        slurm_call = [
+            "sbatch",
+            # Name of Slurm job
+            f"--job-name=jorb_{str(exp_dir).split(sep='_')[-1]}",
+            # Location of Slurm output file
+            f"--output={str(exp_dir / 'slurm_log.out')}",
+            # Number of GPUs
+            f"--gpus={args.gpus}",
+            # Minimum memory per CPU
+            f"--mem-per-cpu={args.mem_per_cpu}G",
+            # Run on unkillable partition by default
+            f"--partition=unkillable",
+            # Environment variables to pass to the experiment script
+            f"--export=ALL,LOG_DIR={str(exp_dir)},LOG_FILE={str(exp_dir / 'exp_record.log')}",
+        ]
+    else:
+        slurm_call = ["python3"]
+    # Path of script to be run, along with arguments to the script
+    slurm_call.append(str(run_script))
     slurm_call += script_args
 
     # Call Slurm with the generated arguments
@@ -125,6 +129,12 @@ def main():
         default=0,
         help="Number of GPUs to allocate for experiment",
     )
+    parser.add_argument(
+        "--local",
+        default=False,
+        action="store_true",
+        help="Whether to run the script locally, or via Slurm",
+    )
     args, script_args = parser.parse_known_args()
 
     # Setup new directory for this experiment
@@ -144,8 +154,12 @@ def main():
     copy_path = copy_script(args.file, exp_dir)
 
     # Send source file to Slurm (sbatch) and log call details
-    call_info = to_slurm(args, exp_dir, copy_path, script_args)
-    logging.info(call_info)
+    try:
+        call_info = to_slurm(args, exp_dir, copy_path, script_args)
+        logging.info(call_info)
+    except Exception as e:
+        logging.error(f"to_slurm crashed, with message: {str(e)}")
+        raise e
 
 
 if __name__ == "__main__":

@@ -100,7 +100,7 @@ def train(
         # Initialize model
         start_time = time()
         mps = MPS(
-            28**2,
+            28 ** 2,
             in_dim=IN_DIM,
             cutoff=SV_CUTOFF,
             lr=LR,
@@ -122,7 +122,7 @@ def train(
         step_count = 1  # Calcuation of initial training loss counts as step
 
         # Add loss offset in case of embedded data
-        offset = log(2) * (28**2) if EMBEDDING_FUN is not None else 0.0
+        offset = log(2) * (28 ** 2) if EMBEDDING_FUN is not None else 0.0
 
         print_fun(f"\n\nStarting config '{EXP_NAME}'")
         print_status(loop_num, mps, test_loss, init_time, offset)
@@ -208,7 +208,7 @@ if __name__ == "__main__":
     # Hyperparameters for the experiment
     #
     for MAX_BDIM in [10, 20, 30, 40, 50, 70, 100, 150, 200, 300, 400, 500, 750, 1000]:
-    # for MAX_BDIM in [10, 20, 30, 40, 50]:
+        # for MAX_BDIM in [10, 20, 30, 40, 50]:
         # MPS hyperparameters
         IN_DIM = 2
         MIN_BDIM = 1
@@ -217,7 +217,7 @@ if __name__ == "__main__":
         SV_CUTOFF = 1e-7
         # EMBEDDING_FUN = None
         EMBEDDING_FUN = partial(trig_embed, emb_dim=IN_DIM)
-        STEPS_PER_EPOCH = 2 * (28**2) - 4
+        STEPS_PER_EPOCH = 2 * (28 ** 2) - 4
         USE_TORCH = False
 
         # Training hyperparameters

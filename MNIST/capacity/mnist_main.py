@@ -17,10 +17,10 @@ resume_from = "/data/mnist/28_127.5/rand1k/DmaxGrad/trail2/L17D1000_"
 
 def grapher(data):
     m, n_space = data.shape
-    aaa = int(n_space**0.5)
-    assert n_space == aaa**2
+    aaa = int(n_space ** 0.5)
+    assert n_space == aaa ** 2
     dat = data.reshape(m, aaa, -1)
-    n_row = int(m**0.5)
+    n_row = int(m ** 0.5)
     dat = np.array_split(dat, n_row)
     n_col = dat[0].shape[0]
     fig, axs = plt.subplots(n_row, n_col, figsize=(n_col, n_row))

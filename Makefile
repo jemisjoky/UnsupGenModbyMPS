@@ -10,14 +10,19 @@ style:
 init:
 	python3 -m MNIST.MNIST_main init
 
-.PHONY: train
-train:
-	python3 -m MNIST.MNIST_main train_from_scratch
+# .PHONY: train
+# train:
+# 	python3 -m MNIST.MNIST_main train_from_scratch
 
 .PHONY: train-cluster
 train-cluster:
 	test -n "$(MSG)" # Must pass experiment message by setting MSG env variable
 	./exp_tracker.py --gpus=1 --mem-per-cpu=16 MNIST/MNIST_main.py "$(MSG)" train_from_scratch
+
+.PHONY: train-local
+train-local:
+	test -n "$(MSG)" # Must pass experiment message by setting MSG env variable
+	./exp_tracker.py --gpus=0 --local MNIST/MNIST_main.py "$(MSG)" train_from_scratch
 
 .PHONY: continue
 continue:
