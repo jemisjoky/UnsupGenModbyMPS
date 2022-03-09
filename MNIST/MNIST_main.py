@@ -14,6 +14,7 @@ from comet_ml import Experiment
 
 # Make MPS functions available for import
 sys.path.insert(0, "/home/mila/m/millerja/UnsupGenModbyMPS")
+sys.path.insert(1, "/home/jemis/Continuous-uMPS/UnsupGenModbyMPS")
 
 from MPScumulant import MPS_c, loadMPS
 from MPScumulant_torch import MPS_c as MPS_c_torch
@@ -39,7 +40,7 @@ def print_status(loop_num, mps, test_loss, epoch_time, offset):
     Print the latest loss and bond dimensions attained by the MPS model
     """
     # MPS can be given as second arg, since loss is easy to extract
-    assert isinstance(mps, MPS_c)
+    assert isinstance(mps, (MPS_c, MPS_c_torch))
 
     # Dictionary containing all the info to print
     to_print = {}
@@ -215,8 +216,8 @@ if __name__ == "__main__":
         # MAX_BDIM = 10
         INIT_BDIM = 2
         SV_CUTOFF = 1e-7
-        # EMBEDDING_FUN = None
-        EMBEDDING_FUN = partial(trig_embed, emb_dim=IN_DIM)
+        EMBEDDING_FUN = None
+        # EMBEDDING_FUN = partial(trig_embed, emb_dim=IN_DIM)
         STEPS_PER_EPOCH = 2 * (28 ** 2) - 4
         USE_TORCH = False
 

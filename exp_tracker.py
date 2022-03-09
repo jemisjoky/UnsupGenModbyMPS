@@ -19,6 +19,8 @@ def setup_logging(log_file):
         format="%(asctime)s %(levelname)s: %(message)s",
         level=logging.INFO,
     )
+    # Add logging to stdout (not just to log file)
+    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
     return logging
 
 
@@ -75,6 +77,7 @@ def to_slurm(args, exp_dir, run_script, script_args):
     If args.local is False, script will be run directly by Python interpreter
     """
     # Generate all the information for the call to sbatch
+    LOG_DIR, LOG_FILE = str(exp_dir), str(exp_dir / "exp_record.log")
     if not args.local:
         slurm_call = [
             "sbatch",
@@ -91,14 +94,19 @@ def to_slurm(args, exp_dir, run_script, script_args):
             # Environment variables to pass to the experiment script
             f"--export=ALL,LOG_DIR={str(exp_dir)},LOG_FILE={str(exp_dir / 'exp_record.log')}",
         ]
+        log_env = None
     else:
         slurm_call = ["python3"]
+        # Pass modified environment to process
+        log_env = os.environ.copy()
+        log_env["LOG_DIR"], log_env["LOG_FILE"] = LOG_DIR, LOG_FILE
+    
     # Path of script to be run, along with arguments to the script
     slurm_call.append(str(run_script))
     slurm_call += script_args
 
     # Call Slurm with the generated arguments
-    return subprocess.run(slurm_call)
+    return subprocess.run(slurm_call, env=log_env)
 
 
 def main():
