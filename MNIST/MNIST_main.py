@@ -15,8 +15,9 @@ from comet_ml import Experiment
 # Make MPS functions available for import
 sys.path.insert(0, "/home/mila/m/millerja/UnsupGenModbyMPS")
 
-# from MPScumulant import MPS_c, loadMPS
-from MPScumulant_torch import MPS_c, loadMPS
+from MPScumulant import MPS_c, loadMPS
+from MPScumulant_torch import MPS_c as MPS_c_torch
+from MPScumulant_torch import loadMPS as loadMPS_torch
 from exp_tracker import setup_logging
 from embeddings import trig_embed
 
@@ -93,9 +94,12 @@ def train(
             with open(log_path, "a") as f:
                 json.dump(PARAM_DICT, f, indent=4)
 
+        MPS = MPS_c_torch if USE_TORCH else MPS_c
+        load_MPS = loadMPS_torch if USE_TORCH else loadMPS
+
         # Initialize model
         start_time = time()
-        mps = MPS_c(
+        mps = MPS(
             28**2,
             in_dim=IN_DIM,
             cutoff=SV_CUTOFF,
@@ -109,10 +113,8 @@ def train(
             embed_fun=EMBEDDING_FUN,
             device=DEVICE,
         )
-        # mps.designate_data(TRAIN_SET.astype(np.float64))
         mps.designate_data(TRAIN_SET)
         mps.get_train_loss()
-        # test_loss = mps.get_test_loss(TEST_SET)
         train_loss = mps.get_test_loss(TRAIN_SET)
         test_loss = mps.get_test_loss(TEST_SET)
         init_time = time() - start_time
@@ -122,6 +124,7 @@ def train(
         # Add loss offset in case of embedded data
         offset = log(2) * (28**2) if EMBEDDING_FUN is not None else 0.0
 
+        print_fun(f"\n\nStarting config '{EXP_NAME}'")
         print_status(loop_num, mps, test_loss, init_time, offset)
         if LOGGER is not None:
             LOGGER.log_metrics(
@@ -153,7 +156,7 @@ def train(
                     return
 
                 # Load the last saved MPS and run it again with the reduced lr
-                mps = loadMPS(mps_path, dataset_path=TRAIN_SET_NAME)
+                mps = load_MPS(mps_path, dataset_path=TRAIN_SET_NAME)
                 mps.lr = new_lr
 
             # Otherwise save the model and keep going
@@ -204,17 +207,18 @@ if __name__ == "__main__":
     #
     # Hyperparameters for the experiment
     #
-    # for MAX_BDIM in [10, 20, 30, 40, 50, 70, 100, 150, 200, 300, 400, 500, 750, 1000]:
-    for MAX_BDIM in [10, 20, 30, 40, 50]:
+    for MAX_BDIM in [10, 20, 30, 40, 50, 70, 100, 150, 200, 300, 400, 500, 750, 1000]:
+    # for MAX_BDIM in [10, 20, 30, 40, 50]:
         # MPS hyperparameters
         IN_DIM = 2
         MIN_BDIM = 1
         # MAX_BDIM = 10
         INIT_BDIM = 2
         SV_CUTOFF = 1e-7
-        EMBEDDING_FUN = partial(trig_embed, emb_dim=IN_DIM)
         # EMBEDDING_FUN = None
+        EMBEDDING_FUN = partial(trig_embed, emb_dim=IN_DIM)
         STEPS_PER_EPOCH = 2 * (28**2) - 4
+        USE_TORCH = False
 
         # Training hyperparameters
         LR = 1e-3
@@ -224,14 +228,16 @@ if __name__ == "__main__":
         LR_SHRINK = 9e-2
         MIN_LR = 1e-5
         COMET_LOG = False
+        # COMET_LOG = True
         PROJECT_NAME = "hanetal-cluster-v1"
-        SAVE_MODEL = True
+        SAVE_MODEL = False
+        # SAVE_MODEL = True
         SAVE_INTERMEDIATE = False
         SEED = 0
 
         # Get info about the available GPUs
         n_gpu = torch.cuda.device_count()
-        DEVICE = "cpu" if n_gpu == 0 else "cuda:0"
+        DEVICE = "cpu" if (n_gpu == 0 or not USE_TORCH) else "cuda:0"
 
         # Setup save directories and logging
         EXP_NAME = f"bd{MAX_BDIM}{'' if DEVICE == 'cpu' else '_gpu'}"
@@ -296,9 +302,10 @@ if __name__ == "__main__":
         TEST_SET = np.load(
             BIN_TEST_SET_NAME if EMBEDDING_FUN is None else TEST_SET_NAME
         )
-        TRAIN_SET, TEST_SET = torch.tensor(TRAIN_SET), torch.tensor(TEST_SET)
-        if EMBEDDING_FUN is None:
-            TRAIN_SET, TEST_SET = TRAIN_SET.long(), TEST_SET.long()
+        if USE_TORCH:
+            TRAIN_SET, TEST_SET = torch.tensor(TRAIN_SET), torch.tensor(TEST_SET)
+            if EMBEDDING_FUN is None:
+                TRAIN_SET, TEST_SET = TRAIN_SET.long(), TEST_SET.long()
 
         assert argv[1] in ["train_from_scratch", "continue"]
         # Initialize a new model if we're not continuing

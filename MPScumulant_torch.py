@@ -96,9 +96,7 @@ class MPS_c:
         self.device = device
 
         # Initialize bond dimensions and MPS core tensors
-        self.bond_dims = init_bd * torch.ones((mps_len,), dtype=torch.int16).to(
-            self.device
-        )
+        self.bond_dims = [init_bd] * mps_len
         self.bond_dims[-1] = 1
         self.matrices = [
             torch.rand(self.bond_dims[i - 1], self.in_dim, self.bond_dims[i])
@@ -567,7 +565,7 @@ class MPS_c:
         snapshot.append("bond dimensions:")
         a = int(torch.sqrt(self.mps_len))
         if self.mps_len % a == 0:
-            a *= len(str(self.bond_dims.max())) + 2
+            a *= len(str(max(self.bond_dims))) + 2
             snapshot.append(str(self.bond_dims))
         else:
             snapshot.append(str(self.bond_dims))

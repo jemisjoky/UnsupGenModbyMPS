@@ -83,6 +83,8 @@ def to_slurm(args, exp_dir, run_script, script_args):
         f"--gpus={args.gpus}",
         # Minimum memory per CPU
         f"--mem-per-cpu={args.mem_per_cpu}G",
+        # Run on unkillable partition by default
+        f"--partition=unkillable",
         # Environment variables to pass to the experiment script
         f"--export=ALL,LOG_DIR={str(exp_dir)},LOG_FILE={str(exp_dir / 'exp_record.log')}",
         # Experiment script itself

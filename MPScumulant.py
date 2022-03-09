@@ -30,6 +30,7 @@ class MPS_c:
         init_bd=2,
         seed=1,
         embed_fun=None,
+        device=None,
     ):
         """
         MPS class, with cumulant technique, efficient in DMRG-2
@@ -47,6 +48,8 @@ class MPS_c:
             seed: random seed used to set model parameters
             embed_fun: optional function embedding continuous-valued data into
                 vectors of dimension ``in_dim``
+            device: unused argument which is present for sake of compatibility
+                with Pytorch version of MPS_c
 
             bond_dims: list of bond dimensions, with bond_dims[i] connects i & i+1
             matrices: list of the tensors A^{(k)}
