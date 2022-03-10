@@ -208,7 +208,7 @@ if __name__ == "__main__":
     #
     # Hyperparameters for the experiment
     #
-    for MAX_BDIM in [10, 20, 30, 40, 50, 70, 100, 150, 200, 300, 400, 500, 750, 1000]:
+    for MAX_BDIM in [10, 20, 30, 40, 50, 70, 100, 150, 200, 300, 400, 500, 750]:
         # for MAX_BDIM in [10, 20, 30, 40, 50]:
         # MPS hyperparameters
         IN_DIM = 2
@@ -216,10 +216,10 @@ if __name__ == "__main__":
         # MAX_BDIM = 10
         INIT_BDIM = 2
         SV_CUTOFF = 1e-7
-        EMBEDDING_FUN = None
-        # EMBEDDING_FUN = partial(trig_embed, emb_dim=IN_DIM)
+        # EMBEDDING_FUN = None
+        EMBEDDING_FUN = partial(trig_embed, emb_dim=IN_DIM)
         STEPS_PER_EPOCH = 2 * (28 ** 2) - 4
-        USE_TORCH = False
+        USE_TORCH = True
 
         # Training hyperparameters
         LR = 1e-3
@@ -228,10 +228,9 @@ if __name__ == "__main__":
         VERBOSITY = 1
         LR_SHRINK = 9e-2
         MIN_LR = 1e-5
-        COMET_LOG = False
-        # COMET_LOG = True
+        COMET_LOG = True
         PROJECT_NAME = "hanetal-cluster-v1"
-        SAVE_MODEL = False
+        SAVE_MODEL = True
         # SAVE_MODEL = True
         SAVE_INTERMEDIATE = False
         SEED = 0
