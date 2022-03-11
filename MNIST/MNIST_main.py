@@ -20,7 +20,7 @@ from MPScumulant import MPS_c, loadMPS
 from MPScumulant_torch import MPS_c as MPS_c_torch
 from MPScumulant_torch import loadMPS as loadMPS_torch
 from exp_tracker import setup_logging
-from embeddings import trig_embed
+from embeddings import trig_embed, binned_embed
 
 np.set_printoptions(5, linewidth=4 * 28)
 
@@ -217,7 +217,8 @@ if __name__ == "__main__":
         INIT_BDIM = 2
         SV_CUTOFF = 1e-7
         # EMBEDDING_FUN = None
-        EMBEDDING_FUN = partial(trig_embed, emb_dim=IN_DIM)
+        # EMBEDDING_FUN = partial(trig_embed, emb_dim=IN_DIM)
+        EMBEDDING_FUN = partial(binned_embed, emb_dim=IN_DIM)
         STEPS_PER_EPOCH = 2 * (28 ** 2) - 4
         USE_TORCH = True
 
@@ -231,7 +232,6 @@ if __name__ == "__main__":
         COMET_LOG = True
         PROJECT_NAME = "hanetal-cluster-v1"
         SAVE_MODEL = True
-        # SAVE_MODEL = True
         SAVE_INTERMEDIATE = False
         SEED = 0
 
@@ -244,7 +244,7 @@ if __name__ == "__main__":
         LOG_DIR = os.getenv("LOG_DIR")
         LOG_FILE = os.getenv("LOG_FILE")
         assert (LOG_DIR is None) == (LOG_FILE is None)
-        if LOG_DIR:
+        if LOG_DIR and "print_fun" not in globals():
             # Shadow print function with logging function
             logging = setup_logging(LOG_FILE)
             print_fun = logging.info

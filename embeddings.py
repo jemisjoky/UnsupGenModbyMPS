@@ -195,7 +195,7 @@ def make_emb_mats(emb_fun, start=0.0, stop=1.0, num_points=1000, eig_cutoff=1e-1
 #     Function giving trivial one-hot embedding of categorical data
 #     """
 #     shape = tensor.shape + (emb_dim,)
-#     output = np.zeros(*shape)
+#     output = np.zeros(shape)
 #     output.scatter_(-1, tensor[..., None], 1)
 #     return output
 
@@ -204,13 +204,29 @@ def binned_embed(tensor, emb_dim, start=0.0, stop=1.0):
     """
     Function binning continuous inputs into one-hot vectors
     """
-    shape = tensor.shape + (emb_dim,)
-    output = torch.zeros(*shape)
+    if isinstance(tensor, torch.Tensor):
+        tensor = tensor.numpy()
+    orig_shape = tensor.shape
+    orig_dtype = tensor.dtype
+    numel = tensor.size
 
-    # TODO: Use advanced indexing to set appropriate values to 1
-    raise NotImplementedError()
+    # I can generalize to handle elements equal to `stop` if needed
+    assert np.all(start <= tensor) and np.all(tensor <= stop)
+    assert emb_dim <= 256
 
-    return output
+    # Rescale to lie in unit interval, and remove epsilon from elements at 1.
+    tensor = (tensor - start) / (stop - start)
+    tensor[tensor == 1.] = 0.9999
+
+    # Bin into integral values
+    tensor = np.floor(tensor * emb_dim).astype(np.uint8)
+
+    # Do the actual one-hot indexing on flattened version of input
+    tensor, idx = tensor.reshape(-1), np.arange(numel)
+    out = np.zeros((numel, emb_dim), dtype=orig_dtype)
+    out[idx, tensor] = 1
+
+    return out.reshape(orig_shape + (emb_dim,))
 
 
 # @torch.no_grad()
