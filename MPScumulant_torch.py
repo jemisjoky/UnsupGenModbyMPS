@@ -17,8 +17,13 @@ from embeddings import make_emb_mats
 
 
 # SVD function (full SVD)
-svd = partial(torch.svd, some=False)
-# svd = torch.linalg.svd
+try:
+    svd = torch.linalg.svd
+except AttributeError:
+    # Older versions of Pytorch don't have Numpy-compatible `torch.linalg.svd`
+    def svd(m):
+        U, S, V = torch.svd(m, some=False)
+        return U, S, V.transpose(-2, -1).conj()
 
 
 class MPS_c:
