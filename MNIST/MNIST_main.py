@@ -8,9 +8,9 @@ from time import time
 from math import sqrt, log
 from functools import partial
 
+from comet_ml import Experiment
 import torch
 import numpy as np
-from comet_ml import Experiment
 
 # Make MPS functions available for import
 sys.path.insert(0, "/home/mila/m/millerja/UnsupGenModbyMPS")
@@ -217,8 +217,8 @@ if __name__ == "__main__":
         INIT_BDIM = 2
         SV_CUTOFF = 1e-7
         # EMBEDDING_FUN = None
-        # EMBEDDING_FUN = partial(trig_embed, emb_dim=IN_DIM)
-        EMBEDDING_FUN = partial(binned_embed, emb_dim=IN_DIM)
+        EMBEDDING_FUN = partial(trig_embed, emb_dim=IN_DIM)
+        # EMBEDDING_FUN = partial(binned_embed, emb_dim=IN_DIM)
         STEPS_PER_EPOCH = 2 * (28 ** 2) - 4
         USE_TORCH = True
 
