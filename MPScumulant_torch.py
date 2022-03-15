@@ -984,7 +984,7 @@ class MPS_c:
             assert len(core.shape) == 3
             left_bd, right_bd = core.shape[0], core.shape[2]
             pad_core = core.new_zeros((self.in_dim, max_bd, max_bd))
-            pad_core[:, :left_bd, :right_bd] = core.transpose(1, 0, 2)
+            pad_core[:, :left_bd, :right_bd] = core.permute(1, 0, 2)
             core_list.append(pad_core)
         core_tensors = torch.stack(core_list, dim=0)
 
