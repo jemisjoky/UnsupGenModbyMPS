@@ -12,9 +12,11 @@ from comet_ml import Experiment
 import torch
 import numpy as np
 
-# Make MPS functions available for import
-sys.path.insert(0, "/home/mila/m/millerja/UnsupGenModbyMPS")
-sys.path.insert(1, "/home/jemis/Continuous-uMPS/UnsupGenModbyMPS")
+# Make MPS functions available for import on any machine this might be run on
+paths = ["/home/mila/m/millerja/UnsupGenModbyMPS", 
+         "/home/jemis/Continuous-uMPS/UnsupGenModbyMPS"]
+for p in paths[::-1]:
+    sys.path.insert(0, p)
 
 from MPScumulant import MPS_c, loadMPS
 from MPScumulant_torch import MPS_c as MPS_c_torch
@@ -209,10 +211,9 @@ if __name__ == "__main__":
     # Hyperparameters for the experiment
     #
     for MAX_BDIM in [10, 20, 30, 40, 50, 70, 100, 150, 200, 300, 400, 500, 750]:
-        # for MAX_BDIM in [10, 20, 30, 40, 50]:
         # MPS hyperparameters
-        IN_DIM = 2
-        MIN_BDIM = 1
+        IN_DIM = 5
+        MIN_BDIM = 2
         # MAX_BDIM = 10
         INIT_BDIM = 2
         SV_CUTOFF = 1e-7
@@ -230,7 +231,7 @@ if __name__ == "__main__":
         LR_SHRINK = 9e-2
         MIN_LR = 1e-5
         COMET_LOG = True
-        PROJECT_NAME = "hanetal-cluster-v1"
+        PROJECT_NAME = "hanetal-cluster-v2"
         SAVE_MODEL = True
         SAVE_INTERMEDIATE = False
         SEED = 0
@@ -240,7 +241,9 @@ if __name__ == "__main__":
         DEVICE = "cpu" if (n_gpu == 0 or not USE_TORCH) else "cuda:0"
 
         # Setup save directories and logging
-        EXP_NAME = f"bd{MAX_BDIM}{'' if DEVICE == 'cpu' else '_gpu'}"
+        EXP_NAME = f"bd{MAX_BDIM}_id{IN_DIM}"
+        EXP_NAME += ("_disc" if EMBEDDING_FUN is None else "_trig")
+        EXP_NAME += ("" if DEVICE == "cpu" else "_gpu")
         LOG_DIR = os.getenv("LOG_DIR")
         LOG_FILE = os.getenv("LOG_FILE")
         assert (LOG_DIR is None) == (LOG_FILE is None)
