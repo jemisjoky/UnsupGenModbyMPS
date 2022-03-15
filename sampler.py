@@ -1,12 +1,14 @@
+#!/usr/bin/env python3
 import gzip
 import pickle
 from math import sqrt
+from pathlib import Path
 
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
 
-from MPScumulant import MPS_c
+from MPScumulant_torch import MPS_c
 
 
 @torch.no_grad()
@@ -179,49 +181,71 @@ def right_trace_mats(tensor_cores, right_vec):
 
 def print_pretrained_samples():
     # Extract core tensors and edge vectors from saved model, convert to torch
-    num_samps = 5
+    num_samps = 10
     # Discrete MPS models
     # save_file = "MNIST/rand1k_runs/mnist1k_27/mps_loop_050.model.gz"    # BD02
     # save_file = "MNIST/rand1k_runs/mnist1k_31/mps_loop_050.model.gz"    # BD10
     # save_file = "MNIST/rand1k_runs/mnist1k_23/mps_loop_050.model.gz"    # BD20
-    save_file = "MNIST/rand1k_runs/mnist1k_25/mps_loop_050.model.gz"  # BD40
+    # save_file = "MNIST/rand1k_runs/mnist1k_25/mps_loop_050.model.gz"    # BD40
     # save_file = "MNIST/rand1k_runs/mnist1k_40/mps_loop_020.model.gz"    # BD70
     # save_file = "MNIST/rand1k_runs/mnist1k_41/mps_loop_020.model.gz"    # BD100
     # save_file = "MNIST/rand1k_runs/mnist1k_42/mps_loop_015.model.gz"    # BD150
 
     # Continuous MPS models
+    input_path = "log_dir/experiment_020"
     # save_file = "MNIST/rand1k_runs/mnist1k_44/mps_loop_016.model.gz"    # BD10
     # save_file = "MNIST/rand1k_runs/mnist1k_46/mps_loop_016.model.gz"    # BD20
     # save_file = "MNIST/rand1k_runs/mnist1k_47/mps_loop_010.model.gz"    # BD30
     # save_file = "MNIST/rand1k_runs/mnist1k_48/mps_loop_012.model.gz"    # BD40
     # save_file = "MNIST/rand1k_runs/mnist1k_49/mps_loop_014.model.gz"    # BD50
 
-    with gzip.open(save_file, "rb") as f:
-        mps = pickle.load(f)
-    core_tensors, edge_vecs = MPS_c.export_params(mps)
-    core_tensors = torch.tensor(core_tensors, dtype=torch.float32)
-    edge_vecs = torch.tensor(edge_vecs, dtype=torch.float32)
-    print(f"Bond_dim = {edge_vecs.shape[1]}")
+    # Get a list of all the model savefiles we're sampling from
+    input_path = Path(input_path).absolute()
+    assert input_path.exists()
+    print_str = f"Producing {num_samps} samples from"
+    if input_path.is_file():
+        save_dir = input_path.parent
+        model_list = [input_path]
+        print_str += f": {input_path}"
+    else:
+        save_dir = input_path
+        model_list = [f for f in input_path.iterdir() if f.suffix == ".model"]
+        print_str += f" each of: {', '.join([str(f) for f in model_list])}"
+    print(print_str)
 
-    samples = sample(
-        core_tensors, edge_vecs, num_samples=num_samps, embed_fun=mps.embed_fun
-    )
+    for save_file in model_list:
+        with gzip.open(save_file, "rb") as f:
+            mps = pickle.load(f)
+        core_tensors, edge_vecs = MPS_c.export_params(mps)
+        if not isinstance(core_tensors, torch.Tensor):
+            core_tensors = torch.tensor(core_tensors, dtype=torch.float32)
+            edge_vecs = torch.tensor(edge_vecs, dtype=torch.float32)
+        else:
+            core_tensors = core_tensors.to(torch.float32)
+            edge_vecs = edge_vecs.to(torch.float32)
 
-    # Reshape and rescale sampled values
-    width = round(sqrt(core_tensors.shape[0]))
-    samples = samples.reshape(num_samps, width, width)
-    assert torch.all(samples >= 0)
-    if torch.any(samples >= 2):
-        samples = samples.float() / samples.max()
+        samples = sample(
+            core_tensors, edge_vecs, num_samples=num_samps, embed_fun=mps.embed_fun
+        )
 
-    # Plot everything with new sampler
-    unseen = True
-    for image in samples:
-        if unseen:
-            unseen = False
-            # print(image)
-        plt.imshow(image, cmap="gray_r", vmin=0, vmax=1)
-        plt.show()
+        # Reshape and rescale sampled values
+        width = round(sqrt(core_tensors.shape[0]))
+        samples = samples.reshape(num_samps, width, width)
+        assert torch.all(samples >= 0)
+        # if torch.any(samples > 1):
+        #     samples = samples.float() / samples.max()
+
+        # Plot everything with new sampler
+        for i, im in enumerate(samples, start=1):
+            # Normalize image
+            cmap, norm = plt.cm.gray_r, plt.Normalize()
+            image = cmap(norm(im))
+
+            # Create image save path
+            im_path = save_dir / f"{save_file.stem}_{i:02d}.png"
+            plt.figure(figsize=(5, 5))
+            plt.imshow(image, interpolation="nearest")
+            plt.savefig(im_path)
 
 
 if __name__ == "__main__":
