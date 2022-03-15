@@ -247,14 +247,15 @@ if __name__ == "__main__":
         LOG_DIR = os.getenv("LOG_DIR")
         LOG_FILE = os.getenv("LOG_FILE")
         assert (LOG_DIR is None) == (LOG_FILE is None)
-        if LOG_DIR and "print_fun" not in globals():
-            # Shadow print function with logging function
-            logging = setup_logging(LOG_FILE)
-            print_fun = logging.info
-        else:
-            print_fun = print
-            # No model saving if we're running locally
-            SAVE_MODEL = False
+        if "print_fun" not in globals():
+            if LOG_DIR:
+                # Shadow print function with logging function
+                logging = setup_logging(LOG_FILE)
+                print_fun = logging.info
+            else:
+                # No model saving if we're running locally
+                SAVE_MODEL = False
+                print_fun = print
 
         # Save hyperparameters, setup Comet logger
         if "PARAM_DICT" in globals().keys():
@@ -270,9 +271,9 @@ if __name__ == "__main__":
                 "TRAIN_SET",
                 "TEST_SET",
             ]
-            assert all(var in globals().keys() for var in vars_to_delete)
             for var in vars_to_delete:
-                del globals()[var]
+                if var in globals().keys():
+                    del globals()[var]
         PARAM_DICT = {k.lower(): v for k, v in globals().items() if k.upper() == k}
 
         # Embedding function can't be serialized, so only keep whether nontrivial embed
@@ -314,3 +315,5 @@ if __name__ == "__main__":
         # Initialize a new model if we're not continuing
         continue_last = argv[1] == "continue"
         train(EPOCHS, continue_last=continue_last)
+
+        # 
