@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import io
 import gzip
 import pickle
 from math import sqrt
@@ -179,25 +180,23 @@ def right_trace_mats(tensor_cores, right_vec):
     return right_mats
 
 
+# Workaround for Pytorch model trained on GPU not loading correctly
+class CPU_Unpickler(pickle.Unpickler):
+    def find_class(self, module, name):
+        if module == 'torch.storage' and name == '_load_from_bytes':
+            return lambda b: torch.load(io.BytesIO(b), map_location='cpu')
+        else: return super().find_class(module, name)
+
+
 def print_pretrained_samples():
     # Extract core tensors and edge vectors from saved model, convert to torch
     num_samps = 10
     # Discrete MPS models
-    # save_file = "MNIST/rand1k_runs/mnist1k_27/mps_loop_050.model.gz"    # BD02
-    # save_file = "MNIST/rand1k_runs/mnist1k_31/mps_loop_050.model.gz"    # BD10
-    # save_file = "MNIST/rand1k_runs/mnist1k_23/mps_loop_050.model.gz"    # BD20
-    # save_file = "MNIST/rand1k_runs/mnist1k_25/mps_loop_050.model.gz"    # BD40
-    # save_file = "MNIST/rand1k_runs/mnist1k_40/mps_loop_020.model.gz"    # BD70
-    # save_file = "MNIST/rand1k_runs/mnist1k_41/mps_loop_020.model.gz"    # BD100
-    # save_file = "MNIST/rand1k_runs/mnist1k_42/mps_loop_015.model.gz"    # BD150
 
     # Continuous MPS models
-    input_path = "log_dir/experiment_020"
-    # save_file = "MNIST/rand1k_runs/mnist1k_44/mps_loop_016.model.gz"    # BD10
-    # save_file = "MNIST/rand1k_runs/mnist1k_46/mps_loop_016.model.gz"    # BD20
-    # save_file = "MNIST/rand1k_runs/mnist1k_47/mps_loop_010.model.gz"    # BD30
-    # save_file = "MNIST/rand1k_runs/mnist1k_48/mps_loop_012.model.gz"    # BD40
-    # save_file = "MNIST/rand1k_runs/mnist1k_49/mps_loop_014.model.gz"    # BD50
+    input_path = "log_dir/cluster_models/bd70_id2_trig_gpu_11.model"
+    # input_path = "log_dir/cluster_models/bd100_id2_trig_gpu_12.model"
+    # input_path = "log_dir/cluster_models/"
 
     # Get a list of all the model savefiles we're sampling from
     input_path = Path(input_path).absolute()
@@ -215,7 +214,11 @@ def print_pretrained_samples():
 
     for save_file in model_list:
         with gzip.open(save_file, "rb") as f:
-            mps = pickle.load(f)
+            try:
+                mps = pickle.load(f)
+            except RuntimeError:
+                mps = CPU_Unpickler(f).load()
+
         core_tensors, edge_vecs = MPS_c.export_params(mps)
         if not isinstance(core_tensors, torch.Tensor):
             core_tensors = torch.tensor(core_tensors, dtype=torch.float32)
@@ -243,7 +246,7 @@ def print_pretrained_samples():
 
             # Create image save path
             im_path = save_dir / f"{save_file.stem}_{i:02d}.png"
-            plt.figure(figsize=(5, 5))
+            plt.figure(figsize=(7, 7))
             plt.imshow(image, interpolation="nearest")
             plt.savefig(im_path)
 
