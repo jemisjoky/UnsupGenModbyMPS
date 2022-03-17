@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 class MPS cumulant
-@author: congzlwag
+@author: congzlwag, jemisjoky
 """
 import pickle
 from itertools import product
@@ -16,13 +16,21 @@ from utils import is_int_type, is_float_type
 from embeddings import make_emb_mats
 
 
-# SVD function (full SVD)
+# SVD function, with error handling to deal with older versions of Pytorch
+# (before svd was put in torch.linalg), and sensitivity of GPU SVD
 try:
     svd = torch.linalg.svd
 except AttributeError:
     # Older versions of Pytorch don't have Numpy-compatible `torch.linalg.svd`
     def svd(m):
-        U, S, V = torch.svd(m, some=False)
+        try:
+            U, S, V = torch.svd(m, some=False)
+        except RuntimeError as e:
+            if m.device != torch.device("cpu"):
+                out = torch.svd(m.to(torch.device("cpu")))
+                U, S, V = [x.to(m.device) for x in out]
+            else:
+                raise e
         return U, S, V.transpose(-2, -1).conj()
 
 
