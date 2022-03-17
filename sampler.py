@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import io
+import sys
 import gzip
 import pickle
 from math import sqrt
@@ -8,6 +9,12 @@ from pathlib import Path
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
+
+# Make MPS functions available for import on any machine this might be run on
+paths = ["/home/mila/m/millerja/UnsupGenModbyMPS", 
+         "/home/jemis/Continuous-uMPS/UnsupGenModbyMPS"]
+for p in paths[::-1]:
+    sys.path.insert(0, p)
 
 from MPScumulant_torch import MPS_c
 
@@ -189,6 +196,7 @@ class CPU_Unpickler(pickle.Unpickler):
 
 
 def print_pretrained_samples():
+    print("Starting sampling process")
     # Extract core tensors and edge vectors from saved model, convert to torch
     num_samps = 10
     # Discrete MPS models
@@ -227,6 +235,7 @@ def print_pretrained_samples():
             core_tensors = core_tensors.to(torch.float32)
             edge_vecs = edge_vecs.to(torch.float32)
 
+        print(f"Generating samples from {save_file}")
         samples = sample(
             core_tensors, edge_vecs, num_samples=num_samps, embed_fun=mps.embed_fun
         )

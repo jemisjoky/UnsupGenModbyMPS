@@ -24,6 +24,12 @@ train-local:
 	test -n "$(MSG)" # Must pass experiment message by setting MSG env variable
 	./exp_tracker.py --gpus=0 --local MNIST/MNIST_main.py "$(MSG)" train_from_scratch
 
+.PHONY: sample-cluster
+sample-cluster:
+	test -n "$(EXP_DIR)" # Must pass location of experiment directory
+	sbatch --job-name=sample_mps --output=DELETE_ME.out --gpus=1 \
+		--mem-per-cpu=32 --partition=unkillable \
+		--export=ALL,EXP_DIR=$(EXP_DIR) sampler.py
 .PHONY: continue
 continue:
 	python3 -m MNIST.MNIST_main continue
