@@ -25,18 +25,6 @@ from MPScumulant_torch import loadMPS as loadMPS_torch
 from exp_tracker import setup_logging
 from embeddings import trig_embed, binned_embed
 
-np.set_printoptions(5, linewidth=4 * 28)
-
-
-def sample_image(mps, typ):
-    dat = mps.generate_sample()
-    a = int(sqrt(dat.size))
-    img = dat.reshape((a, a))
-    if typ == "s":
-        for n in range(1, a, 2):
-            img[n, :] = img[n, ::-1]
-    return img
-
 
 def print_status(loop_num, mps, test_loss, epoch_time, offset):
     """
@@ -226,6 +214,8 @@ if __name__ == "__main__":
         USE_TORCH = True
 
         # Training hyperparameters
+        DATASET = "MNIST"
+        # GENZ_NUM = 5
         LR = 1e-3
         NBATCH = 10
         EPOCHS = 20
@@ -287,27 +277,34 @@ if __name__ == "__main__":
         else:
             LOGGER = None
 
-        # Relevant directories for the random 1k images experiment
-        MNIST_DIR = "./MNIST/"
-        EXP_PREFIX = "mnist1k_"  # Prefix for individual experiment directories
-        BIN_TRAIN_SET_NAME = MNIST_DIR + "mnist-rand1k_28_thr50_z/paper_data.npy"
-        # BIN_TRAIN_SET_NAME = MNIST_DIR + "mnist-rand1k_28_thr50_z/full_train.npy"
-        # BIN_TRAIN_SET_NAME = (
-        #     MNIST_DIR + "mnist-rand1k_28_thr50_z/first1k_train_discrete.npy"
-        # )
-        BIN_TEST_SET_NAME = (
-            MNIST_DIR + "mnist-rand1k_28_thr50_z/first1k_test_discrete.npy"
-        )
-        TRAIN_SET_NAME = MNIST_DIR + "mnist-rand1k_28_thr50_z/first1k_train.npy"
-        TEST_SET_NAME = MNIST_DIR + "mnist-rand1k_28_thr50_z/first1k_test.npy"
+        # Load dataset
+        assert DATASET in ("MNIST", "GMM", "GENZ")
+        if DATASET == "MNIST":
+            MNIST_DIR = "./MNIST/"
+            EXP_PREFIX = "mnist1k_"  # Prefix for individual experiment directories
+            BIN_TRAIN_SET_NAME = MNIST_DIR + "mnist-rand1k_28_thr50_z/paper_data.npy"
+            # BIN_TRAIN_SET_NAME = MNIST_DIR + "mnist-rand1k_28_thr50_z/full_train.npy"
+            # BIN_TRAIN_SET_NAME = (
+            #     MNIST_DIR + "mnist-rand1k_28_thr50_z/first1k_train_discrete.npy"
+            # )
+            BIN_TEST_SET_NAME = (
+                MNIST_DIR + "mnist-rand1k_28_thr50_z/first1k_test_discrete.npy"
+            )
+            TRAIN_SET_NAME = MNIST_DIR + "mnist-rand1k_28_thr50_z/first1k_train.npy"
+            TEST_SET_NAME = MNIST_DIR + "mnist-rand1k_28_thr50_z/first1k_test.npy"
 
-        # Load 1000 random MNIST images
-        TRAIN_SET = np.load(
-            BIN_TRAIN_SET_NAME if EMBEDDING_FUN is None else TRAIN_SET_NAME
-        )
-        TEST_SET = np.load(
-            BIN_TEST_SET_NAME if EMBEDDING_FUN is None else TEST_SET_NAME
-        )
+            # Load 1000 random MNIST images
+            TRAIN_SET = np.load(
+                BIN_TRAIN_SET_NAME if EMBEDDING_FUN is None else TRAIN_SET_NAME
+            )
+            TEST_SET = np.load(
+                BIN_TEST_SET_NAME if EMBEDDING_FUN is None else TEST_SET_NAME
+            )
+        elif DATASET == "GMM":
+            raise NotImplementedError
+        elif DATASET == "GENZ":
+            raise NotImplementedError
+
         if USE_TORCH:
             TRAIN_SET, TEST_SET = torch.tensor(TRAIN_SET), torch.tensor(TEST_SET)
             if EMBEDDING_FUN is None:

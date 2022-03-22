@@ -472,7 +472,9 @@ class MPS_c:
         self.merged_matrix /= norm(self.merged_matrix)
 
         # Verify merged_matrix elements are reasonable
-        assert torch.all(self.merged_matrix.isfinite())
+        if not torch.all(self.merged_matrix.isfinite()):
+            # breakpoint()
+            raise RuntimeError
         if torch.any(self.merged_matrix == 0):
             print(f"Zero elms in merged_mat at k={k}, bid={batch_id}")
             eps = self.merged_matrix.abs().mean() / 1e6

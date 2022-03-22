@@ -8,21 +8,21 @@ style:
 
 .PHONY: init
 init:
-	python3 -m MNIST.MNIST_main init
+	python3 -m train_script init
 
 # .PHONY: train
 # train:
-# 	python3 -m MNIST.MNIST_main train_from_scratch
+# 	python3 -m train_script train_from_scratch
 
 .PHONY: train-cluster
 train-cluster:
 	test -n "$(MSG)" # Must pass experiment message by setting MSG env variable
-	./exp_tracker.py --gpus=1 --mem-per-cpu=16 MNIST/MNIST_main.py "$(MSG)" train_from_scratch
+	./exp_tracker.py --gpus=1 --mem-per-cpu=16 train_script.py "$(MSG)" train_from_scratch
 
 .PHONY: train-local
 train-local:
 	test -n "$(MSG)" # Must pass experiment message by setting MSG env variable
-	./exp_tracker.py --gpus=0 --local MNIST/MNIST_main.py "$(MSG)" train_from_scratch
+	./exp_tracker.py --gpus=0 --local train_script.py "$(MSG)" train_from_scratch
 
 .PHONY: sample-cluster
 sample-cluster:
@@ -32,7 +32,7 @@ sample-cluster:
 		--export=ALL,EXP_DIR=$(EXP_DIR) sampler.py
 .PHONY: continue
 continue:
-	python3 -m MNIST.MNIST_main continue
+	python3 -m train_script continue
 
 .PHONY: rm-all-runs
 rm-all-runs:
