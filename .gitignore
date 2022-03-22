@@ -5,10 +5,11 @@ log_dir/
 # Comet data logging API key
 .comet.config
 
-# Full MNIST dataset
-MNIST/mnist-rand1k_28_thr50_z/full_test.npy
-MNIST/mnist-rand1k_28_thr50_z/full_train.npy
-MNIST/mnist-rand1k_28_thr50_z/full_test_discrete.npy
-MNIST/mnist-rand1k_28_thr50_z/full_train_discrete.npy
+# Larger datasets
+datasets/MNIST/full_test.npy
+datasets/MNIST/full_train.npy
+datasets/MNIST/full_test_discrete.npy
+datasets/MNIST/full_train_discrete.npy
+datasets/genz/*
 
 __pycache__/

@@ -24,6 +24,7 @@ from MPScumulant_torch import MPS_c as MPS_c_torch
 from MPScumulant_torch import loadMPS as loadMPS_torch
 from exp_tracker import setup_logging
 from embeddings import trig_embed, binned_embed
+from datasets import load_genz
 
 
 def print_status(loop_num, mps, test_loss, epoch_time, offset):
@@ -92,7 +93,7 @@ def train(
         # Initialize model
         start_time = time()
         mps = MPS(
-            28 ** 2,
+            mps_len=MODEL_LEN,
             in_dim=IN_DIM,
             cutoff=SV_CUTOFF,
             lr=LR,
@@ -114,7 +115,7 @@ def train(
         step_count = 1  # Calcuation of initial training loss counts as step
 
         # Add loss offset in case of embedded data
-        offset = log(2) * (28 ** 2) if EMBEDDING_FUN is not None else 0.0
+        offset = log(2) * MODEL_LEN if EMBEDDING_FUN is not None else 0.0
 
         print_fun(f"\n\nStarting config '{EXP_NAME}'")
         print_status(loop_num, mps, test_loss, init_time, offset)
@@ -210,12 +211,13 @@ if __name__ == "__main__":
         # EMBEDDING_FUN = None
         EMBEDDING_FUN = partial(trig_embed, emb_dim=IN_DIM)
         # EMBEDDING_FUN = partial(binned_embed, emb_dim=IN_DIM)
-        STEPS_PER_EPOCH = 2 * (28 ** 2) - 4
         USE_TORCH = True
 
         # Training hyperparameters
-        DATASET = "MNIST"
-        # GENZ_NUM = 5
+        DATASET = "GENZ"
+        # DATASET = "MNIST"
+        GENZ_NUM = 5
+        GENZ_LEN = 10
         LR = 1e-3
         NBATCH = 10
         EPOCHS = 20
@@ -223,10 +225,21 @@ if __name__ == "__main__":
         LR_SHRINK = 9e-2
         MIN_LR = 1e-5
         COMET_LOG = False
-        PROJECT_NAME = "hanetal-cluster-v2"
+        PROJECT_NAME = "genz-continuous-v1"
+        # PROJECT_NAME = "hanetal-cluster-v2"
         SAVE_MODEL = True
         SAVE_INTERMEDIATE = False
         SEED = 0
+
+        # Get model length, which depends on dataset
+        assert DATASET in ("MNIST", "GMM", "GENZ")
+        if DATASET == "MNIST":
+            MODEL_LEN = 28 ** 2
+        elif DATASET == "GMM":
+            MODEL_LEN = 10
+        elif DATASET == "GENZ":
+            MODEL_LEN = GENZ_LEN
+        STEPS_PER_EPOCH = 2 * (MODEL_LEN) - 4
 
         # Get info about the available GPUs
         n_gpu = torch.cuda.device_count()
@@ -255,7 +268,6 @@ if __name__ == "__main__":
                 "PARAM_DICT",
                 "LOGGER",
                 "MNIST_DIR",
-                "EXP_PREFIX",
                 "BIN_TRAIN_SET_NAME",
                 "BIN_TEST_SET_NAME",
                 "TRAIN_SET_NAME",
@@ -278,20 +290,12 @@ if __name__ == "__main__":
             LOGGER = None
 
         # Load dataset
-        assert DATASET in ("MNIST", "GMM", "GENZ")
         if DATASET == "MNIST":
-            MNIST_DIR = "./MNIST/"
-            EXP_PREFIX = "mnist1k_"  # Prefix for individual experiment directories
-            BIN_TRAIN_SET_NAME = MNIST_DIR + "mnist-rand1k_28_thr50_z/paper_data.npy"
-            # BIN_TRAIN_SET_NAME = MNIST_DIR + "mnist-rand1k_28_thr50_z/full_train.npy"
-            # BIN_TRAIN_SET_NAME = (
-            #     MNIST_DIR + "mnist-rand1k_28_thr50_z/first1k_train_discrete.npy"
-            # )
-            BIN_TEST_SET_NAME = (
-                MNIST_DIR + "mnist-rand1k_28_thr50_z/first1k_test_discrete.npy"
-            )
-            TRAIN_SET_NAME = MNIST_DIR + "mnist-rand1k_28_thr50_z/first1k_train.npy"
-            TEST_SET_NAME = MNIST_DIR + "mnist-rand1k_28_thr50_z/first1k_test.npy"
+            MNIST_DIR = "./datasets/MNIST/"
+            BIN_TRAIN_SET_NAME = MNIST_DIR + "paper_data.npy"
+            BIN_TEST_SET_NAME = MNIST_DIR + "first1k_test_discrete.npy"
+            TRAIN_SET_NAME = MNIST_DIR + "first1k_train.npy"
+            TEST_SET_NAME = MNIST_DIR + "first1k_test.npy"
 
             # Load 1000 random MNIST images
             TRAIN_SET = np.load(
@@ -303,7 +307,10 @@ if __name__ == "__main__":
         elif DATASET == "GMM":
             raise NotImplementedError
         elif DATASET == "GENZ":
-            raise NotImplementedError
+            assert isinstance(GENZ_NUM, int)
+            assert 1 <= GENZ_NUM <= 6
+            assert EMBEDDING_FUN is not None
+            TRAIN_SET, _, TEST_SET = load_genz(GENZ_NUM, GENZ_LEN)
 
         if USE_TORCH:
             TRAIN_SET, TEST_SET = torch.tensor(TRAIN_SET), torch.tensor(TEST_SET)
@@ -314,5 +321,3 @@ if __name__ == "__main__":
         # Initialize a new model if we're not continuing
         continue_last = argv[1] == "continue"
         train(EPOCHS, continue_last=continue_last)
-
-        # 
