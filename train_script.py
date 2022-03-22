@@ -7,6 +7,7 @@ from sys import argv
 from time import time
 from math import sqrt, log
 from functools import partial
+from itertools import product
 
 from comet_ml import Experiment
 import torch
@@ -201,9 +202,9 @@ if __name__ == "__main__":
     # Hyperparameters for the experiment
     #
     # for MAX_BDIM in [10, 20, 30, 40, 50, 70, 100, 150, 200, 300, 400, 500, 750]:
-    for MAX_BDIM in [20]:
+    for MAX_BDIM, IN_DIM in product([2, 5, 10], [2, 5, 10]):
         # MPS hyperparameters
-        IN_DIM = 5
+        # IN_DIM = 5
         MIN_BDIM = 2
         # MAX_BDIM = 10
         INIT_BDIM = 2
@@ -224,7 +225,7 @@ if __name__ == "__main__":
         VERBOSITY = 1
         LR_SHRINK = 9e-2
         MIN_LR = 1e-5
-        COMET_LOG = False
+        COMET_LOG = True
         PROJECT_NAME = "genz-continuous-v1"
         # PROJECT_NAME = "hanetal-cluster-v2"
         SAVE_MODEL = True
@@ -274,6 +275,7 @@ if __name__ == "__main__":
                 "TEST_SET_NAME",
                 "TRAIN_SET",
                 "TEST_SET",
+                "VAL_SET",
             ]
             for var in vars_to_delete:
                 if var in globals().keys():
@@ -310,7 +312,7 @@ if __name__ == "__main__":
             assert isinstance(GENZ_NUM, int)
             assert 1 <= GENZ_NUM <= 6
             assert EMBEDDING_FUN is not None
-            TRAIN_SET, _, TEST_SET = load_genz(GENZ_NUM, GENZ_LEN)
+            TRAIN_SET, VAL_SET, TEST_SET = load_genz(GENZ_NUM, GENZ_LEN)
 
         if USE_TORCH:
             TRAIN_SET, TEST_SET = torch.tensor(TRAIN_SET), torch.tensor(TEST_SET)

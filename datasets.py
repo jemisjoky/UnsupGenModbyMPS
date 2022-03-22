@@ -3,8 +3,6 @@ import os
 
 import numpy as np
 import torch
-import torchvision
-from torchvision import transforms as tf
 
 
 @torch.no_grad()
