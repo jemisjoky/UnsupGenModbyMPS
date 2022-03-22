@@ -26,11 +26,18 @@ except AttributeError:
         try:
             U, S, V = torch.svd(m, some=False)
         except RuntimeError as e:
-            if m.device != torch.device("cpu"):
-                out = torch.svd(m.to(torch.device("cpu")))
-                U, S, V = [x.to(m.device) for x in out]
-            else:
-                raise e
+            # # Run SVD on CPU rather than GPU (didn't work, but good to keep)
+            # if m.device != torch.device("cpu"):
+            #     out = torch.svd(m.to(torch.device("cpu")))
+            #     U, S, V = [x.to(m.device) for x in out]
+            # else:
+            #     raise e
+
+            # Add some noise to the matrix, then try the SVD again
+            eps = m.abs().mean() / 1e6
+            print(f"Adding randomness to SVD input on scale of {eps:.1e}")
+            m += eps * torch.rand_like(m)
+            U, S, V = torch.svd(m, some=False)
         return U, S, V.transpose(-2, -1).conj()
 
 
@@ -404,15 +411,20 @@ class MPS_c:
             right_vecs,
         )
 
-        psi_inv = 1 / psi
         if torch.any(psi == 0):
             print(
                 "Error: At bond %d, batch_id=%d, while %d of them psi=0."
                 % (self.current_bond, batch_id, (psi == 0).sum())
             )
+            # eps = psi.abs().mean() / 1e6
+            # print(f"Adding randomness on scale of {eps:.1e}")
+            print("Setting zero elements to 1")
+            psi[psi == 0] = 1
             # print(torch.argmax(psi == 0).ravel())
-            print("Maybe you should decrease n_batch")
-            raise ZeroDivisionError("Some of the psis=0")
+            # print("Maybe you should decrease n_batch")
+            # raise ZeroDivisionError("Some of the psis=0")
+
+        psi_inv = 1 / psi
 
         if self.embedded_input:
             gradient = 2 * (
@@ -455,10 +467,17 @@ class MPS_c:
                 gradient[:, i, j, :] = 2 * (
                     torch.einsum("bjk,b->jk", phi_mat[idx, :, :], psi_inv[idx])
                 )
+
         self.merged_matrix += gradient * self.lr
         self.merged_matrix /= norm(self.merged_matrix)
+
+        # Verify merged_matrix elements are reasonable
+        assert torch.all(self.merged_matrix.isfinite())
         if torch.any(self.merged_matrix == 0):
             print(f"Zero elms in merged_mat at k={k}, bid={batch_id}")
+            eps = self.merged_matrix.abs().mean() / 1e6
+            print(f"Adding randomness on scale of {eps:.1e}")
+            self.merged_matrix += eps * torch.rand_like(self.merged_matrix)
 
     @torch.no_grad()
     def update_cumulants(self, gone_right_just_now):

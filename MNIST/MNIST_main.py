@@ -16,7 +16,8 @@ import numpy as np
 paths = ["/home/mila/m/millerja/UnsupGenModbyMPS", 
          "/home/jemis/Continuous-uMPS/UnsupGenModbyMPS"]
 for p in paths[::-1]:
-    sys.path.insert(0, p)
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 from MPScumulant import MPS_c, loadMPS
 from MPScumulant_torch import MPS_c as MPS_c_torch
@@ -210,7 +211,8 @@ if __name__ == "__main__":
     #
     # Hyperparameters for the experiment
     #
-    for MAX_BDIM in [10, 20, 30, 40, 50, 70, 100, 150, 200, 300, 400, 500, 750]:
+    # for MAX_BDIM in [10, 20, 30, 40, 50, 70, 100, 150, 200, 300, 400, 500, 750]:
+    for MAX_BDIM in [20]:
         # MPS hyperparameters
         IN_DIM = 5
         MIN_BDIM = 2
@@ -230,7 +232,7 @@ if __name__ == "__main__":
         VERBOSITY = 1
         LR_SHRINK = 9e-2
         MIN_LR = 1e-5
-        COMET_LOG = True
+        COMET_LOG = False
         PROJECT_NAME = "hanetal-cluster-v2"
         SAVE_MODEL = True
         SAVE_INTERMEDIATE = False
