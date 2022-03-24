@@ -89,13 +89,16 @@ def load_genz(genz_num: int, slice_len=None):
         s_split = np.empty((num_series * s_per_ts, slice_len))
         for i in range(s_per_ts):
             j = i * stride
-            s_split[i*num_series:(i+1)*num_series] = split[:, j:(j + slice_len)]
+            s_split[i * num_series : (i + 1) * num_series] = split[
+                :, j : (j + slice_len)
+            ]
         all_series.append(s_split)
 
     # Shuffle individual time series, save everything to disk
     train, val, test = [rng.permutation(ts) for ts in all_series]
     np.savez_compressed(save_file, train=train, val=val, test=test)
     return train, val, test
+
 
 w = 0.5
 c = 1.0  # I'm using the fact that c=1.0 to set c**2 = c**-2 = c

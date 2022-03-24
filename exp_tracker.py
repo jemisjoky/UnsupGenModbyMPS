@@ -100,7 +100,7 @@ def to_slurm(args, exp_dir, run_script, script_args):
         # Pass modified environment to process
         log_env = os.environ.copy()
         log_env["LOG_DIR"], log_env["LOG_FILE"] = LOG_DIR, LOG_FILE
-    
+
     # Path of script to be run, along with arguments to the script
     slurm_call.append(str(run_script))
     slurm_call += script_args

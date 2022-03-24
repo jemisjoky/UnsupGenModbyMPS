@@ -133,7 +133,7 @@ if __name__ == "__main__":
     images.shape = (-1, length_a, length_a)
 
     lp = int(argv[1])
-    m = MPS_c(length_a ** 2)
+    m = MPS_c(length_a**2)
     m.loadMPS("../Loop%dMPS" % lp)
     print("Using: Loop%dMPS" % lp)
     m.verbose = 0

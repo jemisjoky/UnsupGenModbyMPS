@@ -216,7 +216,7 @@ def binned_embed(tensor, emb_dim, start=0.0, stop=1.0):
 
     # Rescale to lie in unit interval, and remove epsilon from elements at 1.
     tensor = (tensor - start) / (stop - start)
-    tensor[tensor == 1.] = 0.9999
+    tensor[tensor == 1.0] = 0.9999
 
     # Bin into integral values
     tensor = np.floor(tensor * emb_dim).astype(np.uint8)

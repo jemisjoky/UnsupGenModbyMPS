@@ -779,7 +779,7 @@ class MPS_c:
             for p in range(plft2 + 1, self.mps_len):
                 vec_act = np.dot(vec, self.matrices[p][:, 1])
                 nom = norm(vec_act)
-                if rand() < nom ** 2:
+                if rand() < nom**2:
                     # activate
                     state[p] = 1
                     vec = vec_act / nom
@@ -791,7 +791,7 @@ class MPS_c:
             for p in np.arange(plft)[::-1]:
                 vec_act = np.dot(self.matrices[p][:, 1], vec)
                 nom = norm(vec_act)
-                if rand() < nom ** 2:
+                if rand() < nom**2:
                     state[p] = 1
                     vec = vec_act / nom
                 else:

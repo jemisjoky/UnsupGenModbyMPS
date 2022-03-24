@@ -34,7 +34,7 @@ except AttributeError:
             #     raise e
 
             # Add some noise to the matrix, then try the SVD again
-            eps = m.abs().mean() / 1e6
+            eps = m.abs().mean() / 1e3
             print(f"Adding randomness to SVD input on scale of {eps:.1e}")
             m += eps * torch.rand_like(m)
             U, S, V = torch.svd(m, some=False)
@@ -473,8 +473,9 @@ class MPS_c:
 
         # Verify merged_matrix elements are reasonable
         if not torch.all(self.merged_matrix.isfinite()):
-            # breakpoint()
-            raise RuntimeError
+            error_msg = "Found following bad elements in self.merged_matrix: "
+            error_msg += str(self.merged_matrix[~self.merged_matrix.isfinite()])
+            raise RuntimeError(error_msg)
         if torch.any(self.merged_matrix == 0):
             print(f"Zero elms in merged_mat at k={k}, bid={batch_id}")
             eps = self.merged_matrix.abs().mean() / 1e6
@@ -842,7 +843,7 @@ class MPS_c:
             for p in range(plft2 + 1, self.mps_len):
                 vec_act = vec @ self.matrices[p][:, 1]
                 nom = norm(vec_act)
-                if torch.rand() < nom ** 2:
+                if torch.rand() < nom**2:
                     # activate
                     state[p] = 1
                     vec = vec_act / nom
@@ -854,7 +855,7 @@ class MPS_c:
             for p in torch.arange(plft)[::-1]:
                 vec_act = self.matrices[p][:, 1] @ vec
                 nom = norm(vec_act)
-                if torch.rand() < nom ** 2:
+                if torch.rand() < nom**2:
                     state[p] = 1
                     vec = vec_act / nom
                 else:

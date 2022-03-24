@@ -650,7 +650,7 @@ class MPS:
             if gnorm < 1:
                 gradients /= gnorm
         elif self.grad_mode == "elementwise":
-            gradients /= (gradients ** 2 + 5e-6) ** 0.5
+            gradients /= (gradients**2 + 5e-6) ** 0.5
         self.merged_tensor += gradients * 2.0 * self.learning_rate
         self.gradients = None
         self.merged_tensor_BC = None
@@ -769,7 +769,7 @@ class MPS:
             for p in np.arange(self.n)[::-1]:
                 vec_act = self.tensors[p][:, 1].cuda(gpu) @ vec
                 nom = vec_act.norm()
-                if rand() < nom ** 2:
+                if rand() < nom**2:
                     state[p] = 1
                     vec = vec_act / nom
                 else:
@@ -905,7 +905,7 @@ class MPS:
         for p in range(p_given_rightmost + 1, self.n):
             vec_act = mid_mat_fromleft @ self.tensors[p][:, 1].cuda(gpu)
             nom = vec_act.norm()
-            if rand() < nom ** 2:  # activate
+            if rand() < nom**2:  # activate
                 state[p] = 1
                 mid_mat_fromleft = vec_act / nom
             else:  # keep 0
@@ -915,7 +915,7 @@ class MPS:
         for p in np.arange(p_given_leftmost)[::-1]:
             vec_act = self.tensors[p][:, 1].cuda(gpu) @ mid_mat_fromleft
             nom = vec_act.norm()
-            if rand() < nom ** 2:
+            if rand() < nom**2:
                 state[p] = 1
                 mid_mat_fromleft = vec_act / nom
             else:

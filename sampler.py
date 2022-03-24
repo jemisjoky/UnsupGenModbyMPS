@@ -11,8 +11,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # Make MPS functions available for import on any machine this might be run on
-paths = ["/home/mila/m/millerja/UnsupGenModbyMPS", 
-         "/home/jemis/Continuous-uMPS/UnsupGenModbyMPS"]
+paths = [
+    "/home/mila/m/millerja/UnsupGenModbyMPS",
+    "/home/jemis/Continuous-uMPS/UnsupGenModbyMPS",
+]
 for p in paths[::-1]:
     sys.path.insert(0, p)
 
@@ -190,9 +192,10 @@ def right_trace_mats(tensor_cores, right_vec):
 # Workaround for Pytorch model trained on GPU not loading correctly
 class CPU_Unpickler(pickle.Unpickler):
     def find_class(self, module, name):
-        if module == 'torch.storage' and name == '_load_from_bytes':
-            return lambda b: torch.load(io.BytesIO(b), map_location='cpu')
-        else: return super().find_class(module, name)
+        if module == "torch.storage" and name == "_load_from_bytes":
+            return lambda b: torch.load(io.BytesIO(b), map_location="cpu")
+        else:
+            return super().find_class(module, name)
 
 
 def print_pretrained_samples():

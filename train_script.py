@@ -3,7 +3,7 @@
 import os
 import sys
 import json
-from sys import argv
+import traceback
 from time import time
 from math import sqrt, log
 from functools import partial
@@ -14,8 +14,10 @@ import torch
 import numpy as np
 
 # Make MPS functions available for import on any machine this might be run on
-paths = ["/home/mila/m/millerja/UnsupGenModbyMPS", 
-         "/home/jemis/Continuous-uMPS/UnsupGenModbyMPS"]
+paths = [
+    "/home/mila/m/millerja/UnsupGenModbyMPS",
+    "/home/jemis/Continuous-uMPS/UnsupGenModbyMPS",
+]
 for p in paths[::-1]:
     if p not in sys.path:
         sys.path.insert(0, p)
@@ -63,68 +65,55 @@ def print_status(loop_num, mps, test_loss, epoch_time, offset):
 
 def train(
     epochs,
-    continue_last=False,
 ):
     """
     Initialize and train MPS model on MNIST for given number of epochs
     """
     # Find the state of most recent MPS experiment and load it
-    if continue_last:
-        raise NotImplementedError
-        # exp_num, exp_folder = find_latest_exp()
-        # assert exp_num >= 0
-        # loop_num, save_path = find_latest_MPS(exp_folder)
-        # if loop_num > 0:
-        #     print_fun(f"Resuming: Loop {loop_num + 1}")
-        # mps = loadMPS(save_path, dataset_path=TRAIN_SET_NAME)
-        # step_count = len(mps.losses)
+    # Create experiment directory
+    if SAVE_MODEL:
+        # Log the experimental parameters in the folder
+        log_path = os.path.join(LOG_DIR, f"{EXP_NAME}.json")
+        with open(log_path, "a") as f:
+            json.dump(PARAM_DICT, f, indent=4)
 
-    # Initialize a new MPS with desired hyperparameters
-    else:
-        # Create experiment directory
-        if SAVE_MODEL:
-            # Log the experimental parameters in the folder
-            log_path = os.path.join(LOG_DIR, f"{EXP_NAME}.json")
-            with open(log_path, "a") as f:
-                json.dump(PARAM_DICT, f, indent=4)
+    MPS = MPS_c_torch if USE_TORCH else MPS_c
+    load_MPS = loadMPS_torch if USE_TORCH else loadMPS
 
-        MPS = MPS_c_torch if USE_TORCH else MPS_c
-        load_MPS = loadMPS_torch if USE_TORCH else loadMPS
+    # Initialize model
+    start_time = time()
+    mps = MPS(
+        mps_len=MODEL_LEN,
+        in_dim=IN_DIM,
+        cutoff=SV_CUTOFF,
+        lr=LR,
+        nbatch=NBATCH,
+        verbose=VERBOSITY,
+        max_bd=MAX_BDIM,
+        min_bd=MIN_BDIM,
+        init_bd=INIT_BDIM,
+        seed=SEED,
+        embed_fun=EMBEDDING_FUN,
+        device=DEVICE,
+    )
+    mps.designate_data(TRAIN_SET)
+    mps.get_train_loss()
+    train_loss = mps.get_test_loss(TRAIN_SET)
+    test_loss = mps.get_test_loss(TEST_SET)
+    init_time = time() - start_time
+    loop_num = 0
+    step_count = 1  # Calcuation of initial training loss counts as step
 
-        # Initialize model
-        start_time = time()
-        mps = MPS(
-            mps_len=MODEL_LEN,
-            in_dim=IN_DIM,
-            cutoff=SV_CUTOFF,
-            lr=LR,
-            nbatch=NBATCH,
-            verbose=VERBOSITY,
-            max_bd=MAX_BDIM,
-            min_bd=MIN_BDIM,
-            init_bd=INIT_BDIM,
-            seed=SEED,
-            embed_fun=EMBEDDING_FUN,
-            device=DEVICE,
+    # Add loss offset in case of embedded data
+    offset = log(2) * MODEL_LEN if EMBEDDING_FUN is not None else 0.0
+
+    print_fun(f"\n\nStarting config '{EXP_NAME}'")
+    print_status(loop_num, mps, test_loss, init_time, offset)
+    if LOGGER:
+        LOGGER.log_metrics(
+            {"train_loss": train_loss + offset, "test_loss": test_loss + offset},
+            epoch=0,
         )
-        mps.designate_data(TRAIN_SET)
-        mps.get_train_loss()
-        train_loss = mps.get_test_loss(TRAIN_SET)
-        test_loss = mps.get_test_loss(TEST_SET)
-        init_time = time() - start_time
-        loop_num = 0
-        step_count = 1  # Calcuation of initial training loss counts as step
-
-        # Add loss offset in case of embedded data
-        offset = log(2) * MODEL_LEN if EMBEDDING_FUN is not None else 0.0
-
-        print_fun(f"\n\nStarting config '{EXP_NAME}'")
-        print_status(loop_num, mps, test_loss, init_time, offset)
-        if LOGGER is not None:
-            LOGGER.log_metrics(
-                {"train_loss": train_loss + offset, "test_loss": test_loss + offset},
-                epoch=0,
-            )
 
     while loop_num < epochs:
         # if mps.minibond > 1 and mps.bond_dims.mean() > 10:
@@ -195,14 +184,14 @@ def train(
 
 
 if __name__ == "__main__":
-    # Must be called with at least one command
-    assert len(argv) > 1
-
     #
     # Hyperparameters for the experiment
     #
     # for MAX_BDIM in [10, 20, 30, 40, 50, 70, 100, 150, 200, 300, 400, 500, 750]:
-    for MAX_BDIM, IN_DIM in product([2, 5, 10], [2, 5, 10]):
+    # for IN_DIM, MAX_BDIM in product([5, 10, 15], [2, 5, 10]):
+    for IN_DIM, MAX_BDIM in product(
+        [5, 10, 15], [20, 30, 40, 50, 70, 100, 150, 200, 300, 400, 500]
+    ):
         # MPS hyperparameters
         # IN_DIM = 5
         MIN_BDIM = 2
@@ -215,8 +204,8 @@ if __name__ == "__main__":
         USE_TORCH = True
 
         # Training hyperparameters
-        DATASET = "GENZ"
-        # DATASET = "MNIST"
+        # DATASET = "GENZ"
+        DATASET = "MNIST"
         GENZ_NUM = 5
         GENZ_LEN = 10
         LR = 1e-3
@@ -226,8 +215,8 @@ if __name__ == "__main__":
         LR_SHRINK = 9e-2
         MIN_LR = 1e-5
         COMET_LOG = True
-        PROJECT_NAME = "genz-continuous-v1"
-        # PROJECT_NAME = "hanetal-cluster-v2"
+        # PROJECT_NAME = "genz-continuous-v1"
+        PROJECT_NAME = "hanetal-cluster-v2"
         SAVE_MODEL = True
         SAVE_INTERMEDIATE = False
         SEED = 0
@@ -235,7 +224,7 @@ if __name__ == "__main__":
         # Get model length, which depends on dataset
         assert DATASET in ("MNIST", "GMM", "GENZ")
         if DATASET == "MNIST":
-            MODEL_LEN = 28 ** 2
+            MODEL_LEN = 28**2
         elif DATASET == "GMM":
             MODEL_LEN = 10
         elif DATASET == "GENZ":
@@ -248,8 +237,8 @@ if __name__ == "__main__":
 
         # Setup save directories and logging
         EXP_NAME = f"bd{MAX_BDIM}_id{IN_DIM}"
-        EXP_NAME += ("_disc" if EMBEDDING_FUN is None else "_trig")
-        EXP_NAME += ("" if DEVICE == "cpu" else "_gpu")
+        EXP_NAME += "_disc" if EMBEDDING_FUN is None else "_trig"
+        EXP_NAME += "" if DEVICE == "cpu" else "_gpu"
         LOG_DIR = os.getenv("LOG_DIR")
         LOG_FILE = os.getenv("LOG_FILE")
         assert (LOG_DIR is None) == (LOG_FILE is None)
@@ -319,7 +308,14 @@ if __name__ == "__main__":
             if EMBEDDING_FUN is None:
                 TRAIN_SET, TEST_SET = TRAIN_SET.long(), TEST_SET.long()
 
-        assert argv[1] in ["train_from_scratch", "continue"]
-        # Initialize a new model if we're not continuing
-        continue_last = argv[1] == "continue"
-        train(EPOCHS, continue_last=continue_last)
+        # Train the model, with error handling in case it crashes
+        try:
+            train(EPOCHS)
+        except RuntimeError as e:
+            print("Training crashed, due to the following error:")
+            print(repr(e))
+            print(traceback.format_exc())
+
+        # End the Comet experiment
+        if LOGGER:
+            LOGGER.end()
