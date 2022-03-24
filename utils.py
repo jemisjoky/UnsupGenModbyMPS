@@ -1,4 +1,5 @@
 import os
+from math import log, log2
 
 import torch
 import numpy as np
@@ -9,6 +10,44 @@ NP_INTS = tuple(getattr(np, f"int{nb}") for nb in [8, 16, 32, 64]) + (np.uint8,)
 T_FLOATS = tuple(getattr(torch, f"float{nb}") for nb in [16, 32, 64])
 NP_FLOATS = tuple(getattr(np, f"float{nb}") for nb in [16, 32, 64, 128])
 COMPLEXES = tuple(getattr(np, f"complex{nb}") for nb in [64, 128, 256])
+
+
+def init_stable(tensor):
+    """
+    Initialize log register for an input tensor
+    """
+    return tensor.new_zeros((), dtype=torch.int64)
+
+
+def stabilize(tensor, log_register):
+    """
+    Rescale input tensor by power of 2, with rescaling added to log register
+    """
+    # Compute a power-of-two rescaling factor for tensor
+    log2_norm = tensor.abs().sum().log2()
+    log2_target = log2(tensor.numel())
+    log2_rescale = (log2_target - log2_norm).long()
+
+    # Ignore rescale if it is infinite (input tensor is zero tensor) 
+    if ~log2_rescale.isfinite():
+        log2_rescale[()] = 0
+
+    # Incorporate rescaling in tensor and log register
+    return tensor * 2.0**log2_rescale, log_register - log2_rescale
+
+
+def destabilize(tensor, log_register):
+    """
+    Incorporate log register rescaling into input tensor
+    """
+    return tensor * 2.0**log_register
+
+
+def stable_log(tensor, log_register):
+    """
+    Compute natural log of input tensor, incorporating log register
+    """
+    return tensor.log() + log(2) * log_register
 
 
 def rm_intermediate_checkpoints(exp_dir="./MNIST/rand1k_runs/"):
@@ -68,9 +107,16 @@ def is_complex_type(array):
 
 
 if __name__ == "__main__":
-    from sys import argv
+    # Test out stabilization code
+    for n in list(range(100)) + [torch.zeros(())]:
+        if isinstance(n, int):
+            order = n // 20
+            shape = tuple(range(2, 2 + order))
+            orig_tensor = torch.randn(shape) * (10 ** (16 * torch.rand(()) - 8))
+        else:
+            orig_tensor = n
 
-    assert len(argv) > 1
-
-    if argv[1] == "rm_intermediate":
-        rm_intermediate_checkpoints()
+        assert torch.allclose(
+            destabilize(*stabilize(orig_tensor, init_stable(orig_tensor))),
+            orig_tensor,
+        )
