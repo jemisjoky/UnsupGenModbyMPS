@@ -3,8 +3,7 @@ from sys import path, argv
 
 path.append("../")
 import numpy as np
-from numpy.random import rand, shuffle, randint
-from numpy.linalg import norm
+from numpy.random import rand
 import matplotlib as mpl
 
 mpl.use("Agg")
@@ -139,7 +138,7 @@ if __name__ == "__main__":
     m.verbose = 0
 
     """m2 is the result of gauge transformation of m.
-	The only uncanonical tensor in m2 is at the middle."""
+    The only uncanonical tensor in m2 is at the middle."""
     # m2 = MPS_c(length_a**2)
     # m2.loadMPS('../Loop%d_middleMPS'%lp)
     # print('Using: Loop%d_middleMPS'%lp)

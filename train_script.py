@@ -5,7 +5,7 @@ import sys
 import json
 import traceback
 from time import time
-from math import sqrt, log
+from math import log
 from functools import partial
 from itertools import product
 
@@ -189,11 +189,12 @@ if __name__ == "__main__":
     #
     # for MAX_BDIM in [10, 20, 30, 40, 50, 70, 100, 150, 200, 300, 400, 500, 750]:
     # for IN_DIM, MAX_BDIM in product([5, 10, 15], [2, 5, 10]):
-    for IN_DIM, MAX_BDIM in product(
-        [5, 10, 15], [20, 30, 40, 50, 70, 100, 150, 200, 300, 400, 500]
-    ):
+    # for IN_DIM, MAX_BDIM in product(
+    #     [5, 10, 15], [20, 30, 40, 50, 70, 100, 150, 200, 300, 400, 500]
+    # ):
+    for MAX_BDIM in [10, 20, 30, 40]:
         # MPS hyperparameters
-        # IN_DIM = 5
+        IN_DIM = 2
         MIN_BDIM = 2
         # MAX_BDIM = 10
         INIT_BDIM = 2

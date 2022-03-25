@@ -28,7 +28,7 @@ def stabilize(tensor, log_register):
     log2_target = log2(tensor.numel())
     log2_rescale = (log2_target - log2_norm).long()
 
-    # Ignore rescale if it is infinite (input tensor is zero tensor) 
+    # Ignore rescale if it is infinite (input tensor is zero tensor)
     if ~log2_rescale.isfinite():
         log2_rescale[()] = 0
 
@@ -120,3 +120,8 @@ if __name__ == "__main__":
             destabilize(*stabilize(orig_tensor, init_stable(orig_tensor))),
             orig_tensor,
         )
+        abs_tensor = orig_tensor.abs()
+        assert torch.allclose(
+            stable_log(*stabilize(abs_tensor, init_stable(abs_tensor))),
+            abs_tensor.log()
+            )

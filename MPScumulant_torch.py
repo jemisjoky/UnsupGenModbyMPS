@@ -12,7 +12,13 @@ import torch
 import numpy as np
 from torch.linalg import norm
 
-from utils import is_int_type, is_float_type
+from utils import (
+    is_int_type,
+    is_float_type,
+    init_stable,
+    stabilize,
+    stable_log,
+)
 from embeddings import make_emb_mats
 
 
@@ -314,7 +320,9 @@ class MPS_c:
     @torch.no_grad()
     def init_cumulants(self):
         """
-        Initialize a cache for left environments and right environments, `cumulants'
+        Initialize a cache for left environments and right environments, cumulants,
+        as well as a log-base-2 rescaling register that avoids numerical over/
+        underflow in cumulants for long sequences.
         During the training phase, it will be kept unchanged that:
         1) len(cumulant)== mps_len
         2) cumulant[0]  == torch.ones((n_sample, 1))
@@ -328,33 +336,39 @@ class MPS_c:
             self.current_bond -= 1
 
         self.cumulants = [self.matrices[0].new_ones((self.data.shape[0], 1))]
+        self.cumul_log = [init_stable(self.cumulants[-1])]
         for n in range(0, self.current_bond):
-            self.cumulants.append(
-                torch.einsum(
-                    "bj,jbk->bk",
-                    self.cumulants[-1],
-                    slice_core(self.matrices[n], self.data[:, n]),
-                )
+            new_cumulant = torch.einsum(
+                "bj,jbk->bk",
+                self.cumulants[-1],
+                slice_core(self.matrices[n], self.data[:, n]),
             )
+            new_cumulant, new_log = stabilize(new_cumulant, self.cumul_log[-1])
+            self.cumulants.append(new_cumulant), self.cumul_log.append(new_log)
+
         right_part = [self.matrices[0].new_ones((1, self.data.shape[0]))]
+        right_clog = [init_stable(right_part[-1])]
         for n in range(self.mps_len - 1, self.current_bond + 1, -1):
-            right_part = [
-                torch.einsum(
-                    "jbl,lb->jb",
-                    slice_core(self.matrices[n], self.data[:, n]),
-                    right_part[0],
-                )
-            ] + right_part
-        self.cumulants = self.cumulants + right_part
+            new_cumulant = torch.einsum(
+                "jbl,lb->jb",
+                slice_core(self.matrices[n], self.data[:, n]),
+                right_part[-1],
+            )
+            new_cumulant, new_log = stabilize(new_cumulant, right_clog[-1])
+        self.cumulants = self.cumulants + right_part[::-1]
+        self.cumul_log = torch.stack(self.cumul_log + right_clog[::-1])
 
     @torch.no_grad()
     def Give_psi_cumulant(self):
         """
         Calculate the probability amplitudes of everything in the training set
+
+        This returns a tuple of the rescaled probability amplitudes and a
+        log-base-2 rescaling factor which is added later to the NLL loss
         """
         k = self.current_bond
         if self.merged_matrix is None:
-            return torch.einsum(
+            raw_psi = torch.einsum(
                 "bj,jbk,kbl,lb->b",
                 self.cumulants[k],
                 slice_core(self.matrices[k], self.data[:, k]),
@@ -362,7 +376,7 @@ class MPS_c:
                 self.cumulants[k + 1],
             )
         else:
-            return torch.einsum(
+            raw_psi = torch.einsum(
                 "bj,jbk,kb->b",
                 self.cumulants[k],
                 slice_merged_core(
@@ -371,17 +385,21 @@ class MPS_c:
                 self.cumulants[k + 1],
             )
 
+        return raw_psi, self.cumul_log[k : k + 2].sum()
+
     @torch.no_grad()
     def get_train_loss(self, append=True):
         """Get the NLL averaged on the training set"""
-        L = -2 * self.Give_psi_cumulant().abs().log().mean()  # - self.data_shannon
+        # L = -2 * self.Give_psi_cumulant().abs().log().mean()  # - self.data_shannon
+        raw_psi, log_scale = self.Give_psi_cumulant()
+        L = -2 * stable_log(raw_psi.abs(), log_scale).mean()
         if append:
             self.losses.append([self.current_bond, L])
         return L
 
     @torch.no_grad()
     def gradient_descent_cumulants(self, batch_id):
-        """ Gradient descent using cumulants, which efficiently avoids lots of tensor contraction!\\
+        """ Gradient descent using cumulants, which avoids lots of tensor contraction
             Together with update_cumulants, its computational complexity for updating each tensor is D^2
             Added by Pan Zhang on 2017.08.01
             Revised to single cumulant by Jun Wang on 20170802
@@ -396,7 +414,6 @@ class MPS_c:
         k = self.current_bond
         kp1 = (k + 1) % self.mps_len
         km1 = (k - 1) % self.mps_len
-        #
         left_vecs = self.cumulants[k][indx, :]  # shape = (batchsize, D)
         right_vecs = self.cumulants[kp1][:, indx]  # shape = (D, batchsize)
 
@@ -404,27 +421,27 @@ class MPS_c:
         phi_mat = torch.einsum("bj,kb->bjk", left_vecs, right_vecs)
 
         # Probability amplitudes associated with all inputs in the batch
-        psi = torch.einsum(
+        raw_psi = torch.einsum(
             "bj,jbk,kb->b",
             left_vecs,
             slice_merged_core(self.merged_matrix, states[:, k], states[:, kp1]),
             right_vecs,
         )
 
-        if torch.any(psi == 0):
+        if torch.any(raw_psi == 0):
             print(
                 "Error: At bond %d, batch_id=%d, while %d of them psi=0."
-                % (self.current_bond, batch_id, (psi == 0).sum())
+                % (self.current_bond, batch_id, (raw_psi == 0).sum())
             )
-            # eps = psi.abs().mean() / 1e6
+            # eps = raw_psi.abs().mean() / 1e6
             # print(f"Adding randomness on scale of {eps:.1e}")
             print("Setting zero elements to 1")
-            psi[psi == 0] = 1
-            # print(torch.argmax(psi == 0).ravel())
+            raw_psi[raw_psi == 0] = 1
+            # print(torch.argmax(raw_psi == 0).ravel())
             # print("Maybe you should decrease n_batch")
             # raise ZeroDivisionError("Some of the psis=0")
 
-        psi_inv = 1 / psi
+        psi_inv = 1 / raw_psi
 
         if self.embedded_input:
             gradient = 2 * (
@@ -490,16 +507,22 @@ class MPS_c:
         """
         k = self.current_bond
         if gone_right_just_now:
-            self.cumulants[k] = torch.einsum(
+            new_cumulant = torch.einsum(
                 "bj,jbk->bk",
                 self.cumulants[k - 1],
                 slice_core(self.matrices[k - 1], self.data[:, k - 1]),
             )
+            self.cumulants[k], self.cumul_log[k] = stabilize(
+                new_cumulant, self.cumul_log[k - 1]
+            )
         else:
-            self.cumulants[k + 1] = torch.einsum(
+            new_cumulant = torch.einsum(
                 "jbk,kb->jb",
                 slice_core(self.matrices[k + 2], self.data[:, k + 2]),
                 self.cumulants[k + 2],
+            )
+            self.cumulants[k + 1], self.cumul_log[k + 1] = stabilize(
+                new_cumulant, self.cumul_log[k + 2]
             )
 
     @torch.no_grad()
@@ -574,13 +597,6 @@ class MPS_c:
                 # print("Recommend cutoff for next loop:", "Keep current value")
                 return self.cutoff
 
-    # def log_batch_loss(self, loss, bond, logger):
-    #     """
-    #     If logger is set, log the loss associated with local optimization step
-    #     """
-    #     if logger is not None:
-    #         logger.log_metrics({"batch_loss": loss, "current_bond": bond})
-
     @torch.no_grad()
     def train_snapshot(self):
         """
@@ -644,46 +660,59 @@ class MPS_c:
 
     @torch.no_grad()
     def get_prob_amps(self, states):
-        """Calculate the corresponding psi for configuration `states'"""
+        """
+        Calculate the corresponding psi for configuration `states`
+
+        Returns a tuple of the rescaled psi and a log-base-2 rescaling factor
+        """
         if states.ndim == 1:
             states = states.reshape((1, -1))
+
         if self.merged_matrix is not None:
-            # There's a merged tensor
             nsam = states.shape[0]
             k = self.current_bond
             kp1 = (k + 1) % self.mps_len
             left_vecs = self.merged_matrix.new_ones((nsam, 1))
             right_vecs = self.merged_matrix.new_ones((1, nsam))
+            left_log = init_stable(left_vecs)
+            right_log = init_stable(right_vecs)
+
             for i in range(0, k):
                 left_vecs = torch.einsum(
                     "bj,jbk->bk", left_vecs, slice_core(self.matrices[i], states[:, i])
                 )
+                left_vecs, left_log = stabilize(left_vecs, left_log)
+
             for i in range(self.mps_len - 1, k + 1, -1):
                 right_vecs = torch.einsum(
                     "jbk,kb->jb", slice_core(self.matrices[i], states[:, i]), right_vecs
                 )
-            return torch.einsum(
+                right_vecs, right_log = stabilize(right_vecs, right_log)
+
+            raw_psi = torch.einsum(
                 "bk,kbl,lb->b",
                 left_vecs,
                 slice_merged_core(self.merged_matrix, states[:, k], states[:, kp1]),
                 right_vecs,
             )
+            return raw_psi, left_log + right_log
+
         else:
-            # TT -- default status
-            # try:
             left_vecs = slice_core(self.matrices[0], states[:, 0])[0, :, :]
-            # except IndexError:
-            #     print(self.matrices[0].shape, states)
-            #     sys.exit(-10)
+            left_log = init_stable(left_vecs)
+
             for n in range(1, self.mps_len - 1):
                 left_vecs = torch.einsum(
                     "bj,jbl->bl", left_vecs, slice_core(self.matrices[n], states[:, n])
                 )
-            return torch.einsum(
+                left_vecs, left_log = stabilize(left_vecs, left_log)
+
+            raw_psi = torch.einsum(
                 "bj,jb->b",
                 left_vecs,
                 slice_core(self.matrices[-1], states[:, -1])[:, :, 0],
             )
+            return raw_psi, left_log
 
     @torch.no_grad()
     def get_test_loss(self, test_set):
@@ -694,7 +723,9 @@ class MPS_c:
             test_set = torch.tensor(
                 self.embed_fun(test_set.to("cpu")), device=self.device
             )
-        return -2 * self.get_prob_amps(test_set).abs().log().mean()
+        # return -2 * self.get_prob_amps(test_set).abs().log().mean()
+        raw_psi, log_scale = self.get_prob_amps(test_set)
+        return -2 * stable_log(raw_psi.abs(), log_scale).mean()
 
     @torch.no_grad()
     def generate_sample(self, given_seg=None, *arg):
