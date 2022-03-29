@@ -5,6 +5,7 @@ import gzip
 import pickle
 from math import sqrt
 from pathlib import Path
+from functools import partial
 
 import torch
 import numpy as np
@@ -19,6 +20,9 @@ for p in paths[::-1]:
     sys.path.insert(0, p)
 
 from MPScumulant_torch import MPS_c
+
+CPU = torch.device("cpu")
+print_fun = partial(print, flush=True)
 
 
 @torch.no_grad()
@@ -42,6 +46,8 @@ def sample(cores, edge_vecs, num_samples=1, embed_fun=None):
     input_dim = cores[0].shape[0]
     assert len(edge_vecs) == 2
     left_vec, right_vec = edge_vecs
+    assert edge_vecs.device == cores.device
+    device = cores.device
 
     # Get right PSD matrices resulting from tracing over right cores of MPS
     right_mats = right_trace_mats(cores, right_vec)
@@ -52,7 +58,7 @@ def sample(cores, edge_vecs, num_samples=1, embed_fun=None):
         num_points = 1000
         points = torch.linspace(0.0, 1.0, steps=num_points)
         dx = 1 / (num_points - 1)
-        emb_vecs = torch.tensor(embed_fun(points))
+        emb_vecs = torch.tensor(embed_fun(points)).to(device)
         assert emb_vecs.shape[1] == input_dim
 
         # Get rank-1 matrices for each point, then numerically integrate
@@ -68,7 +74,7 @@ def sample(cores, edge_vecs, num_samples=1, embed_fun=None):
     l_vecs = left_vec[None].expand(num_samples, -1)
     samples, step = [], 0
     for core, r_mat in zip(cores, right_mats):
-        print(f"\rSample {step}", end="")
+        print_fun(f"\rSample {step}", end="")
         step += 1
         samps, l_vecs = _sample_step(
             core,
@@ -80,8 +86,8 @@ def sample(cores, edge_vecs, num_samples=1, embed_fun=None):
             points,
         )
         samples.append(samps)
-    print()
-    samples = torch.stack(samples, dim=1)
+    print_fun()
+    samples = torch.stack(samples, dim=1).to(CPU)
 
     # If needed, convert integer sample outcomes into continuous values
     if embed_fun is not None:
@@ -105,6 +111,8 @@ def _sample_step(
     """
     Function for generating single batch of samples
     """
+    device = core.device
+    
     # Get unnormalized probabilities and normalize
     if embed_fun is not None:
         int_probs = torch.einsum(
@@ -129,19 +137,19 @@ def _sample_step(
     try:
         assert torch.all(int_probs >= 0)  # Tolerance for small negative values
     except AssertionError:
-        print(int_probs)
-        print("WARNING: Some negative probabilities found")
-    assert torch.allclose(int_probs[:, -1], torch.ones(1))
+        print_fun(int_probs)
+        print_fun("WARNING: Some negative probabilities found")
+    assert torch.allclose(int_probs[:, -1], int_probs.new_ones(()))
 
     # Sample from int_probs (argmax finds first int_p with int_p > rand_val)
     # rand_vals = torch.rand((num_samples, 1), generator=generator)
-    rand_vals = torch.rand((num_samples, 1))
+    rand_vals = torch.rand((num_samples, 1)).to(device)
     samp_ints = torch.argmax((int_probs > rand_vals).long(), dim=1)
 
     # Conditionally update new left boundary vectors
     if embed_fun is not None:
-        samp_points = points[samp_ints]
-        emb_vecs = torch.tensor(embed_fun(samp_points))
+        samp_points = points[samp_ints.to(CPU)]
+        emb_vecs = torch.tensor(embed_fun(samp_points), device=device)
         l_vecs = torch.einsum("bl,ilr,bi->br", l_vecs, core, emb_vecs)
     else:
         samp_mats = core[samp_ints]
@@ -175,13 +183,13 @@ def right_trace_mats(tensor_cores, right_vec):
     r_mat = right_vec[:, None] @ right_vec[None].conj()
     right_mats, step = [r_mat], len(tensor_cores)
     for core in tensor_cores.flip(dims=[0])[:-1]:  # Iterate backwards up to first core
-        print(f"\rMarginalize {step}", end="")
+        print_fun(f"\rMarginalize {step}", end="")
         step -= 1
         r_mat = torch.einsum("ilr,ims,rs->lm", core, core.conj(), r_mat)
         # Stabilize norm
         r_mat /= torch.trace(r_mat)
         right_mats.append(r_mat)
-    print()
+    print_fun()
 
     if uniform_input:
         right_mats = torch.stack(right_mats[::-1])
@@ -199,19 +207,20 @@ class CPU_Unpickler(pickle.Unpickler):
 
 
 def print_pretrained_samples():
-    print("Starting sampling process")
-    # Extract core tensors and edge vectors from saved model, convert to torch
+    print_fun("Starting sampling process")
     num_samps = 10
+
     # Discrete MPS models
 
     # Continuous MPS models
-    input_path = "log_dir/cluster_models/bd70_id2_trig_gpu_11.model"
+    input_path = "log_dir/experiment_043/"
+    # input_path = "log_dir/experiment_036/bd10_id2_trig_gpu_20.model"
+    # input_path = "log_dir/cluster_models/bd70_id2_trig_gpu_11.model"
     # input_path = "log_dir/cluster_models/bd100_id2_trig_gpu_12.model"
-    # input_path = "log_dir/cluster_models/"
 
     # Get a list of all the model savefiles we're sampling from
     input_path = Path(input_path).absolute()
-    assert input_path.exists()
+    assert input_path.exists(), input_path
     print_str = f"Producing {num_samps} samples from"
     if input_path.is_file():
         save_dir = input_path.parent
@@ -221,7 +230,7 @@ def print_pretrained_samples():
         save_dir = input_path
         model_list = [f for f in input_path.iterdir() if f.suffix == ".model"]
         print_str += f" each of: {', '.join([str(f) for f in model_list])}"
-    print(print_str)
+    print_fun(print_str)
 
     for save_file in model_list:
         with gzip.open(save_file, "rb") as f:
@@ -238,7 +247,13 @@ def print_pretrained_samples():
             core_tensors = core_tensors.to(torch.float32)
             edge_vecs = edge_vecs.to(torch.float32)
 
-        print(f"Generating samples from {save_file}")
+        # Move parameters to appropriate device
+        n_gpu = torch.cuda.device_count()
+        device = torch.device("cpu" if (n_gpu == 0) else "cuda:0")
+        core_tensors = core_tensors.to(device)
+        edge_vecs = edge_vecs.to(device)
+
+        print_fun(f"Generating samples from {save_file}")
         samples = sample(
             core_tensors, edge_vecs, num_samples=num_samps, embed_fun=mps.embed_fun
         )
