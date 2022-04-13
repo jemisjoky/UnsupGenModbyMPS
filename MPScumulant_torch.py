@@ -1056,15 +1056,16 @@ class MPS_c:
         return core_tensors, edge_vecs
 
 
-def loadMPS(save_file, dataset_path=None):
+def loadMPS(save_file, dataset=None):
     """
     Load a saved MPS from a Pickle file and possibly initialize it with data
     """
     with gzip.open(save_file, "rb") as f:
         mps = pickle.load(f)
 
-    if dataset_path is not None:
-        dataset = np.load(dataset_path)
+    if dataset is not None:
+        if not hasattr(dataset, "shape"):
+            dataset = np.load(dataset)
         mps.designate_data(torch.tensor(dataset).to(mps.device))
 
     return mps

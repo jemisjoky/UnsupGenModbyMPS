@@ -27,7 +27,7 @@ from MPScumulant_torch import MPS_c as MPS_c_torch
 from MPScumulant_torch import loadMPS as loadMPS_torch
 from exp_tracker import setup_logging
 from embeddings import trig_embed, binned_embed
-from datasets import load_genz
+from datasets import load_genz, bars_and_stripes
 
 
 def print_status(loop_num, mps, test_loss, epoch_time, offset):
@@ -129,7 +129,7 @@ def train(
             epoch_time = time() - start_time
 
             # If loss is increasing, turn down LR and redo training
-            if mps.losses[-1][-1] > loss_last and SAVE_MODEL:
+            if mps.losses[-1][-1] > loss_last and SAVE_MODEL and loop_num > 0:
                 new_lr = mps.lr * LR_SHRINK
                 print_fun(
                     f"lr={mps.lr:1.3e} is too large, decreasing to lr={new_lr:1.3e}"
@@ -139,7 +139,7 @@ def train(
                     return
 
                 # Load the last saved MPS and run it again with the reduced lr
-                mps = load_MPS(mps_path, dataset_path=TRAIN_SET_NAME)
+                mps = load_MPS(mps_path, dataset=TRAIN_SET)
                 mps.lr = new_lr
 
             # Otherwise save the model and keep going
@@ -199,37 +199,42 @@ if __name__ == "__main__":
         # MAX_BDIM = 10
         INIT_BDIM = 2
         SV_CUTOFF = 1e-7
-        # EMBEDDING_FUN = None
-        EMBEDDING_FUN = partial(trig_embed, emb_dim=IN_DIM)
+        EMBEDDING_FUN = None
+        # EMBEDDING_FUN = partial(trig_embed, emb_dim=IN_DIM)
         # EMBEDDING_FUN = partial(binned_embed, emb_dim=IN_DIM)
         USE_TORCH = True
 
         # Training hyperparameters
         # DATASET = "GENZ"
-        DATASET = "MNIST"
         GENZ_NUM = 5
         GENZ_LEN = 10
+        # DATASET = "MNIST"
+        DATASET = "BS"
+        BS_WIDTH = 10
         LR = 1e-3
         NBATCH = 10
         EPOCHS = 20
         VERBOSITY = 1
         LR_SHRINK = 9e-2
         MIN_LR = 1e-5
-        COMET_LOG = True
+        COMET_LOG = False
         # PROJECT_NAME = "genz-continuous-v1"
-        PROJECT_NAME = "hanetal-cluster-v2"
+        # PROJECT_NAME = "hanetal-cluster-v2"
+        PROJECT_NAME = "continuous-bars-stripes-v1"
         SAVE_MODEL = True
         SAVE_INTERMEDIATE = False
         SEED = 0
 
         # Get model length, which depends on dataset
-        assert DATASET in ("MNIST", "GMM", "GENZ")
+        assert DATASET in ("MNIST", "GMM", "GENZ", "BS")
         if DATASET == "MNIST":
             MODEL_LEN = 28**2
         elif DATASET == "GMM":
             MODEL_LEN = 10
         elif DATASET == "GENZ":
             MODEL_LEN = GENZ_LEN
+        elif DATASET == "BS":
+            MODEL_LEN = BS_WIDTH ** 2
         STEPS_PER_EPOCH = 2 * (MODEL_LEN) - 4
 
         # Get info about the available GPUs
@@ -303,6 +308,10 @@ if __name__ == "__main__":
             assert 1 <= GENZ_NUM <= 6
             assert EMBEDDING_FUN is not None
             TRAIN_SET, VAL_SET, TEST_SET = load_genz(GENZ_NUM, GENZ_LEN)
+        elif DATASET == "BS":
+            assert BS_WIDTH >= 1
+            dss = bars_and_stripes(BS_WIDTH)
+            TRAIN_SET, VAL_SET, TEST_SET = [ds.astype("float64") for ds in dss]
 
         if USE_TORCH:
             TRAIN_SET, TEST_SET = torch.tensor(TRAIN_SET), torch.tensor(TEST_SET)

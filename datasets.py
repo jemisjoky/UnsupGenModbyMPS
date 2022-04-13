@@ -1,5 +1,6 @@
 """Dataset loaders for MNIST, fashion MNIST, and Genz time series"""
 import os
+from math import floor
 
 import numpy as np
 import torch
@@ -99,6 +100,44 @@ def load_genz(genz_num: int, slice_len=None):
     np.savez_compressed(save_file, train=train, val=val, test=test)
     return train, val, test
 
+
+def bars_and_stripes(width=10, max_size=12000, seed=0):
+    """
+    Generate images from bars and stripes dataset
+    Note that *all* images are generated before a subset are selected, so
+    choosing height/width too large will lead to a long runtime
+
+    Args:
+        width (int): Width (and height) of square B&S images
+        max_size (int): Maximum number of images in all returned splits
+        seed (int): Random seed for reproducibility
+    Returns:
+        bs_data (Tensor): Flattened integer-valued bars and stripes
+            data, with shape (num_output, width**2)
+    """
+    width = int(width)
+    num_total = 2 ** (width + 1) - 2
+    num_output = min(num_total, max_size)
+
+    # Create bit masks which will be used to define bar/stripe patterns
+    patterns = np.arange(2 ** width)
+    filters = np.arange(width)
+    bit_masks = (((patterns[:, np.newaxis] & (1 << filters))) > 0).astype(int)
+
+    # Generate all 2**(width + 1) - 2 images using above bit masks
+    bs_data = np.zeros((num_total, width, width))
+    bs_data[: num_total // 2] = bit_masks[:-1, :, np.newaxis]  # Bars
+    bs_data[num_total // 2 :] = bit_masks[1:, np.newaxis, :]  # Stripes
+
+    # Shuffle dataset and determine size to output
+    bs_data = np.random.RandomState(seed).permutation(bs_data)
+
+    # Split dataset into train, val, and test
+    bs_data = bs_data[:num_output].reshape((num_output, -1)).astype("float32")
+    lrg, sml = floor(num_output * 10 / 12), floor(num_output * 1 / 12)
+    train, val, test = bs_data[:lrg], bs_data[lrg:lrg+sml], bs_data[lrg+sml:lrg+2*sml]
+
+    return train, val, test
 
 w = 0.5
 c = 1.0  # I'm using the fact that c=1.0 to set c**2 = c**-2 = c
