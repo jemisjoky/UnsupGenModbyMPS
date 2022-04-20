@@ -213,7 +213,7 @@ def print_pretrained_samples():
     # Discrete MPS models
 
     # Continuous MPS models
-    input_path = "log_dir/experiment_043/"
+    input_path = "log_dir/experiment_026/"
     # input_path = "log_dir/experiment_036/bd10_id2_trig_gpu_20.model"
     # input_path = "log_dir/cluster_models/bd70_id2_trig_gpu_11.model"
     # input_path = "log_dir/cluster_models/bd100_id2_trig_gpu_12.model"
@@ -276,6 +276,7 @@ def print_pretrained_samples():
             plt.figure(figsize=(7, 7))
             plt.imshow(image, interpolation="nearest")
             plt.savefig(im_path)
+            plt.close("all")
 
 
 if __name__ == "__main__":

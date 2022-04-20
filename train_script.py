@@ -192,15 +192,15 @@ if __name__ == "__main__":
     # for IN_DIM, MAX_BDIM in product(
     #     [5, 10, 15], [20, 30, 40, 50, 70, 100, 150, 200, 300, 400, 500]
     # ):
-    for MAX_BDIM in [10, 20, 30, 40]:
+    for MAX_BDIM in [10, 20, 30, 40, 50]:
         # MPS hyperparameters
-        IN_DIM = 2
+        IN_DIM = 5
         MIN_BDIM = 2
         # MAX_BDIM = 10
         INIT_BDIM = 2
         SV_CUTOFF = 1e-7
-        EMBEDDING_FUN = None
-        # EMBEDDING_FUN = partial(trig_embed, emb_dim=IN_DIM)
+        # EMBEDDING_FUN = None
+        EMBEDDING_FUN = partial(trig_embed, emb_dim=IN_DIM)
         # EMBEDDING_FUN = partial(binned_embed, emb_dim=IN_DIM)
         USE_TORCH = True
 
@@ -211,13 +211,13 @@ if __name__ == "__main__":
         # DATASET = "MNIST"
         DATASET = "BS"
         BS_WIDTH = 10
-        LR = 1e-3
+        LR = 1e-4
         NBATCH = 10
         EPOCHS = 20
         VERBOSITY = 1
         LR_SHRINK = 9e-2
         MIN_LR = 1e-5
-        COMET_LOG = False
+        COMET_LOG = True
         # PROJECT_NAME = "genz-continuous-v1"
         # PROJECT_NAME = "hanetal-cluster-v2"
         PROJECT_NAME = "continuous-bars-stripes-v1"
@@ -311,7 +311,11 @@ if __name__ == "__main__":
         elif DATASET == "BS":
             assert BS_WIDTH >= 1
             dss = bars_and_stripes(BS_WIDTH)
-            TRAIN_SET, VAL_SET, TEST_SET = [ds.astype("float64") for ds in dss]
+
+            if EMBEDDING_FUN is None:
+                TRAIN_SET, VAL_SET, TEST_SET = [ds.astype("int32") for ds in dss]
+            else:
+                TRAIN_SET, VAL_SET, TEST_SET = [ds.astype("float64") for ds in dss]
 
         if USE_TORCH:
             TRAIN_SET, TEST_SET = torch.tensor(TRAIN_SET), torch.tensor(TEST_SET)
